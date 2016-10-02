@@ -1,5 +1,20 @@
+// Taken from https://github.com/Nanonid/rison at 917679fb6cafa15e2a186cd5a47163792899b321
 
-
+// Uses CommonJS, AMD or browser globals to create a module.
+// Based on: https://github.com/umdjs/umd/blob/master/commonjsStrict.js
+(function (root, factory) {
+    if (typeof define === 'function' && define.amd) {
+        // AMD. Register as an anonymous module.
+        define(['exports'], factory);
+    } else if (typeof exports === 'object') {
+        // CommonJS
+        factory(exports);
+    } else {
+        // Browser globals
+        factory((root.rison = {}));
+    }
+}(this, function (exports) {
+var rison = exports;
 
 //////////////////////////////////////////////////
 //
@@ -116,21 +131,22 @@ rison.quote = function(x) {
     var sq = { // url-ok but quoted in strings
                "'": true,  '!': true
     },
+    enc = function (v) {
+        if (v && typeof v.toJSON === 'function') v = v.toJSON();
+        var fn = s[typeof v];
+        if (fn) return fn(v);
+    },
     s = {
             array: function (x) {
                 var a = ['!('], b, f, i, l = x.length, v;
                 for (i = 0; i < l; i += 1) {
-                    v = x[i];
-                    f = s[typeof v];
-                    if (f) {
-                        v = f(v);
-                        if (typeof v == 'string') {
-                            if (b) {
-                                a[a.length] = ',';
-                            }
-                            a[a.length] = v;
-                            b = true;
+                    v = enc(x[i]);
+                    if (typeof v == 'string') {
+                        if (b) {
+                            a[a.length] = ',';
                         }
+                        a[a.length] = v;
+                        b = true;
                     }
                 }
                 a[a.length] = ')';
@@ -165,17 +181,13 @@ rison.quote = function(x) {
                     ks.sort();
                     for (ki = 0; ki < ks.length; ki++) {
                         i = ks[ki];
-                        v = x[i];
-                        f = s[typeof v];
-                        if (f) {
-                            v = f(v);
-                            if (typeof v == 'string') {
-                                if (b) {
-                                    a[a.length] = ',';
-                                }
-                                a.push(s.string(i), ':', v);
-                                b = true;
+                        v = enc(x[i]);
+                        if (typeof v == 'string') {
+                            if (b) {
+                                a[a.length] = ',';
                             }
+                            a.push(s.string(i), ':', v);
+                            b = true;
                         }
                     }
                     a[a.length] = ')';
@@ -197,7 +209,8 @@ rison.quote = function(x) {
                 return "'" + x + "'";
             },
             undefined: function (x) {
-                throw new Error("rison can't encode the undefined value");
+                // ignore undefined just like JSON
+                return;
             }
         };
 
@@ -210,7 +223,7 @@ rison.quote = function(x) {
      *
      */
     rison.encode = function (v) {
-        return s[typeof v](v);
+        return enc(v);
     };
 
     /**
@@ -492,13 +505,16 @@ rison.parser.prototype.table = {
 
 // return the next non-whitespace character, or undefined
 rison.parser.prototype.next = function () {
+    var c;
     var s = this.string;
     var i = this.index;
     do {
         if (i == s.length) return undefined;
-        var c = s.charAt(i++);
+        c = s.charAt(i++);
     } while (rison.parser.WHITESPACE.indexOf(c) >= 0);
     this.index = i;
     return c;
 };
 
+// End of UMD module wrapper
+}));
