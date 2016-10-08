@@ -114,8 +114,8 @@ define(function (require) {
         var outputConfig = _.bind(function () {
             return output.getComponent(this.id, this.sourceEditorId);
         }, this);
-        this.container.layoutManager.createDragSource(this.domRoot.find(".status"), outputConfig);
-        this.domRoot.find(".status").click(_.bind(function () {
+        this.container.layoutManager.createDragSource(this.domRoot.find(".status").parent(), outputConfig);
+        this.domRoot.find(".status").parent().click(_.bind(function () {
             var insertPoint = hub.findParentRowOrColumn(this.container)
                 || this.container.layoutManager.root.contentItems[0];
             insertPoint.addChild(outputConfig());
@@ -268,8 +268,18 @@ define(function (require) {
 
     Compiler.prototype.onCompileResponse = function (request, result) {
         this.lastResult = result;
-        ga('send', 'event', 'Compile', request.compiler, request.options, result.code);
-        ga('send', 'timing', 'Compile', 'Timing', Date.now() - request.timestamp);
+        ga('send', {
+            hitType: 'event',
+            eventCategory: 'Compile',
+            eventAction: request.compiler,
+            eventLabel: request.options
+        });
+        ga('send', {
+            hitType: 'timing',
+            timingCategory: 'Compile',
+            timingVar: request.compiler,
+            timingValue: Date.now() - request.timestamp
+        });
         this.outputEditor.operation(_.bind(function () {
             this.setAssembly(result.asm || fakeAsm("[no output]"));
             if (request.filters.binary) {
@@ -286,7 +296,7 @@ define(function (require) {
         var warns = !failed && !!allText;
         status.toggleClass('error', failed);
         status.toggleClass('warning', warns);
-        status.attr('title', allText);
+        status.parent().attr('title', allText);
         this.eventHub.emit('compileResult', this.id, this.compiler, result);
     };
 
