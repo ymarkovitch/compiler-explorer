@@ -61,14 +61,18 @@ var port = opts.port || 10240;
 var staticDir = opts.static || 'static';
 var gitReleaseName = child_process.execSync('git rev-parse HEAD').toString().trim();
 
-var propHierarchy = [
+console.log(env);
+console.log(typeof(env));
+var propHierarchy = _.flatten([
     'defaults',
     env,
     language,
-    env + '.' + process.platform,
+    _.map(env, function (e) {
+        return e + '.' + process.platform;
+    }),
     process.platform,
-    os.hostname()];
-console.log("properties hierarchy: " + propHierarchy);
+    os.hostname()]);
+console.log("properties hierarchy: " + propHierarchy.join(', '));
 
 // Propagate debug mode if need be
 if (opts.propDebug) props.setDebug(true);
@@ -252,7 +256,7 @@ function configuredCompilers() {
         exes.push.apply(exes, toolchains);
     }
 
-    function fetchRemote(host, port) {
+    function fetchRemote(host, port, props) {
         console.log("Fetching compilers from remote source " + host + ":" + port);
         return retryPromise(function () {
                 return new Promise(function (resolve, reject) {
@@ -282,8 +286,8 @@ function configuredCompilers() {
                 });
             },
             host + ":" + port,
-            awsProps('proxyRetries', 5),
-            awsProps('proxyRetryMs', 500))
+            props('proxyRetries', 5),
+            props('proxyRetryMs', 500))
             .catch(function () {
                 console.log("Unable to contact " + host + ":" + port + "; skipping");
                 return [];
@@ -299,7 +303,7 @@ function configuredCompilers() {
                 if (awsProps("externalTestMode", false)) {
                     address = instance.PublicDnsName;
                 }
-                return fetchRemote(address, port);
+                return fetchRemote(address, port, awsProps);
             }));
         });
     }
@@ -309,7 +313,7 @@ function configuredCompilers() {
             var bits = name.split("@");
             var host = bits[0];
             var port = parseInt(bits[1]);
-            return fetchRemote(host, port);
+            return fetchRemote(host, port, gccProps);
         }
         if (name == "AWS") {
             return fetchAws();
@@ -422,7 +426,7 @@ function shortUrlHandler(req, res, next) {
     var bits = req.url.split("/");
     if (bits.length !== 2 || req.method !== "GET") return next();
     var key = process.env.GOOGLE_API_KEY;
-    var googleApiUrl = 'https://www.googleapis.com/urlshortener/v1/url?shortUrl=http://goo.gl/' + 
+    var googleApiUrl = 'https://www.googleapis.com/urlshortener/v1/url?shortUrl=http://goo.gl/' +
         encodeURIComponent(bits[1]) + '&key=' + key;
     https.get(googleApiUrl, function (response) {
         var responseText = '';
@@ -431,7 +435,7 @@ function shortUrlHandler(req, res, next) {
         });
         response.on('end', function () {
             if (response.statusCode != 200) {
-                console.log("Failed to resolve short URL " + bits[1] + " - got response " + 
+                console.log("Failed to resolve short URL " + bits[1] + " - got response " +
                     response.statusCode + " : " + responseText);
                 return next();
             }
