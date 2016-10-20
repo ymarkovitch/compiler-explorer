@@ -1,0 +1,11 @@
+#! /bin/bash
+PROGDIR="$(dirname $(readlink -f $0))"
+cd "$PROGDIR" || exit 1
+
+if SVRPID=$(pgrep -f compiler-explorer.js)
+then
+    echo "Stopping '$(ps -fh --pid $SVRPID)'..." 1>&2
+    { kill $SVRPID && echo "OK" 1>&2 ; } || { echo "FAILURE" 1>&2 ; exit 1 ; }
+else
+    nohup node ./compiler-explorer.js --host=localhost --language C++ $@ >>log/compiler-explorer.log 2>&1 &
+fi

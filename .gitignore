@@ -4,3 +4,5 @@
 /.bower-updated
 /out
 *.heapsnapshot
+log/
+*~
