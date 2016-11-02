@@ -57,12 +57,10 @@ define(function (require) {
     var _ = require('underscore');
     var $ = require('jquery');
     var GoldenLayout = require('goldenlayout');
-    var compiler = require('compiler');
-    var editor = require('editor');
+    var Components = require('components');
     var url = require('url');
     var clipboard = require('clipboard');
     var Hub = require('hub');
-    var shortenURL = require('urlshorten-google');
     var Raven = require('raven-js');
 
     function start() {
@@ -76,29 +74,45 @@ define(function (require) {
         var defaultSrc = $('.template .lang.' + safeLang).text().trim();
         var defaultConfig = {
             settings: {showPopoutIcon: false},
-            content: [{type: 'row', content: [editor.getComponent(1), compiler.getComponent(1)]}]
+            content: [{type: 'row', content: [Components.getEditor(1), Components.getCompiler(1)]}]
         };
-        var root = $("#root");
-        var config = url.deserialiseState(window.location.hash.substr(1));
-        if (config) {
-            // replace anything in the default config with that from the hash
-            config = _.extend(defaultConfig, config);
-        }
+
         $(window).bind('hashchange', function () {
             // punt on hash events and just reload the page if there's a hash
             if (window.location.hash.substr(1))
                 window.location.reload();
         });
 
-        if (!config) {
-            var savedState = null;
-            try {
-                savedState = window.localStorage.getItem('gl');
-            } catch (e) {
-                // Some browsers in secure modes can throw exceptions here...
+        var config;
+        if (!options.embedded) {
+            config = url.deserialiseState(window.location.hash.substr(1));
+            if (config) {
+                // replace anything in the default config with that from the hash
+                config = _.extend(defaultConfig, config);
             }
-            config = savedState !== null ? JSON.parse(savedState) : defaultConfig;
+
+            if (!config) {
+                var savedState = null;
+                try {
+                    savedState = window.localStorage.getItem('gl');
+                } catch (e) {
+                    // Some browsers in secure modes can throw exceptions here...
+                }
+                config = savedState !== null ? JSON.parse(savedState) : defaultConfig;
+            }
+        } else {
+            config = _.extend(defaultConfig,
+                {
+                    settings: {
+                        showMaximiseIcon: false,
+                        showCloseIcon: false,
+                        hasHeaders: false
+                    },
+                    content: sharing.contentFromEmbedded(window.location.hash.substr(1))
+                });
         }
+
+        var root = $("#root");
 
         var layout;
         try {
@@ -110,11 +124,17 @@ define(function (require) {
             new Hub(layout, defaultSrc);
         }
         layout.on('stateChanged', function () {
-            var state = JSON.stringify(layout.toConfig());
-            try {
-                window.localStorage.setItem('gl', state);
-            } catch (e) {
-                // Some browsers in secure modes may throw
+            var config = layout.toConfig();
+            // Only preserve state in localStorage in non-embedded mode.
+            if (!options.embedded) {
+                var state = JSON.stringify(config);
+                try {
+                    window.localStorage.setItem('gl', state);
+                } catch (e) {
+                    // Some browsers in secure modes may throw
+                }
+            } else {
+                $('a.link').attr('href', '/#' + url.serialiseState(config));
             }
         });
 
@@ -128,51 +148,6 @@ define(function (require) {
         sizeRoot();
 
         new clipboard('.btn.clippy');
-
-        function initPopover(getLink, provider) {
-            var html = $('.template .urls').html();
-
-            getLink.popover({
-                container: 'body',
-                content: html,
-                html: true,
-                placement: 'bottom',
-                trigger: 'manual'
-            }).click(function () {
-                getLink.popover('show');
-            }).on('inserted.bs.popover', function () {
-                provider(function (url) {
-                    $(".permalink:visible").val(url);
-                });
-            });
-
-            // Dismiss the popover on escape.
-            $(document).on('keyup.editable', function (e) {
-                if (e.which === 27) {
-                    getLink.popover("hide");
-                }
-            });
-
-            // Dismiss on any click that isn't either on the opening element, or inside
-            // the popover.
-            $(document).on('click.editable', function (e) {
-                var target = $(e.target);
-                if (!target.is(getLink) && target.closest('.popover').length === 0)
-                    getLink.popover("hide");
-            });
-        }
-
-        function permalink() {
-            var config = layout.toConfig();
-            return window.location.href.split('#')[0] + '#' + url.serialiseState(config);
-        }
-
-        initPopover($("#get-full-link"), function (done) {
-            done(permalink);
-        });
-        initPopover($("#get-short-link"), function (done) {
-            shortenURL(permalink(), done);
-        });
     }
 
     $(start);

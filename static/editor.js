@@ -30,9 +30,10 @@ define(function (require) {
     var $ = require('jquery');
     var colour = require('colour');
     var Toggles = require('toggles');
-    var compiler = require('compiler');
     var loadSaveLib = require('loadSave');
     var FontScale = require('fontscale');
+    var Sharing = require('sharing');
+    var Components = require('components');
 
     require('codemirror/mode/clike/clike');
     require('codemirror/mode/d/d');
@@ -78,6 +79,7 @@ define(function (require) {
             matchBrackets: true,
             useCPP: true,
             dragDrop: false,
+            readOnly: state.options ? !!state.options.readOnly : false,
             extraKeys: {"Alt-F": false}, // see https://github.com/mattgodbolt/gcc-explorer/pull/131
             mode: cmMode
         });
@@ -159,7 +161,7 @@ define(function (require) {
         this.eventHub.on('compileResult', this.onCompileResponse, this);
         this.eventHub.on('selectLine', this.onSelectLine, this);
 
-        var compilerConfig = compiler.getComponent(this.id);
+        var compilerConfig = Components.getCompiler(this.id);
 
         this.container.layoutManager.createDragSource(
             this.domRoot.find('.btn.add-compiler'), compilerConfig);
@@ -168,12 +170,16 @@ define(function (require) {
                 this.container.layoutManager.root.contentItems[0];
             insertPoint.addChild(compilerConfig);
         }, this));
+
+        Sharing.initShareButton(this.domRoot.find('.share'), container.layoutManager);
+
+        this.updateState();
     }
 
     Editor.prototype.maybeEmitChange = function (force) {
         var source = this.getSource();
         if (!force && source == this.lastChangeEmitted) return;
-        this.lastChangeEmitted = this.getSource();
+        this.lastChangeEmitted = source;
         this.eventHub.emit('editorChange', this.id, this.lastChangeEmitted);
     };
 
@@ -285,22 +291,6 @@ define(function (require) {
     };
 
     return {
-        Editor: Editor,
-        getComponent: function (id) {
-            return {
-                type: 'component',
-                componentName: 'codeEditor',
-                componentState: {id: id},
-                isClosable: false
-            };
-        },
-        getComponentWith: function (id, source, options) {
-            return {
-                type: 'component',
-                componentName: 'codeEditor',
-                componentState: {id: id, source: source, options: options},
-                isClosable: false
-            };
-        }
+        Editor: Editor
     };
 });

@@ -28,8 +28,7 @@ define(function (require) {
     var GoldenLayout = require('goldenlayout');
     var rison = require('rison');
     var $ = require('jquery');
-    var editor = require('editor');
-    var compiler = require('compiler');
+    var Components = require('components');
     var lzstring = require('lzstring');
     var _ = require('underscore');
 
@@ -46,8 +45,8 @@ define(function (require) {
         var options = {compileOnChange: true, colouriseAsm: state.filterAsm.colouriseAsm};
         var filters = _.clone(state.filterAsm);
         delete filters.colouriseAsm;
-        content.push(editor.getComponentWith(1, source, options));
-        content.push(compiler.getComponentWith(1, filters, sc.options, sc.compiler));
+        content.push(Components.getEditorWith(1, source, options));
+        content.push(Components.getCompilerWith(1, filters, sc.options, sc.compiler));
         return {version: 4, content: [{type: 'row', content: content}]};
     }
 
@@ -117,6 +116,8 @@ define(function (require) {
 
     return {
         deserialiseState: deserialiseState,
-        serialiseState: serialiseState
+        serialiseState: serialiseState,
+        unrisonify: unrisonify,
+        risonify: risonify
     };
 });
