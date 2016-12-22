@@ -51,7 +51,6 @@ node_modules: $(NODE_MODULES)
 bower_modules: $(BOWER_MODULES)
 
 test: $(NODE_MODULES) lint
-	(cd test; $(NODE) test.js)
 	$(MAKE) -C c-preload test
 	@echo Tests pass
 
@@ -61,7 +60,7 @@ clean:
 	$(MAKE) -C c-preload clean
 
 run: prereqs
-	$(NODE) ./node_modules/.bin/supervisor -w app.js,lib,etc/config -e 'js|node|properties' --exec $(NODE) -- ./app.js --language $(LANG)
+	$(NODE) ./node_modules/.bin/supervisor -w app.js,lib,etc/config -e 'js|node|properties' --exec $(NODE) -- ./app.js --language $(LANG) $(EXTRA_ARGS)
 
 HASH := $(shell git rev-parse HEAD)
 dist: prereqs

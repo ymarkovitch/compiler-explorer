@@ -18,52 +18,33 @@
 // CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
 // SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
 // INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ,
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-var _ = require('underscore-node');
+var should = require('chai').should();
+var CompilationEnvironment = require('../lib/compilation-env').CompilationEnvironment;
 
-var tabsRe = /\t/g;
-var lineRe = /\r?\n/;
+var props = function (key, deflt) {
+    switch (key) {
+        case 'optionsWhitelistRe':
+            return '.*';
+        case 'optionsBlacklistRe':
+            return '^(-W[alp],)?((-wrapper|-fplugin.*|-specs|-load|-plugin|(@.*)|-I|-i)(=.*)?|--)$';
+    }
+    return deflt;
+};
 
-function splitLines(text) {
-    return text.split(lineRe);
-}
-exports.splitLines = splitLines;
-
-function eachLine(text, func, context) {
-    return _.each(splitLines(text), func, context);
-}
-exports.eachLine = eachLine;
-
-function expandTabs(line) {
-    "use strict";
-    var extraChars = 0;
-    return line.replace(tabsRe, function (match, offset) {
-        var total = offset + extraChars;
-        var spacesNeeded = (total + 8) & 7;
-        extraChars += spacesNeeded - 1;
-        return "        ".substr(spacesNeeded);
+describe('Compilation environment', function () {
+    var ce = new CompilationEnvironment(props);
+    it('Should cache', function () {
+        should.not.exist(ce.cacheGet('foo'));
+        ce.cachePut('foo', 'bar');
+        ce.cacheGet('foo').should.equal('bar');
+        should.not.exist(ce.cacheGet('baz'));
     });
-}
-exports.expandTabs = expandTabs;
-
-function parseOutput(lines, inputFilename) {
-    var re = /^<source>[:(]([0-9]+)(:[0-9]+:)?[):]*\s*(.*)/;
-    var result = [];
-    eachLine(lines, function (line) {
-        line = line.trim().replace(inputFilename, '<source>');
-        if (line !== "" && line.indexOf("fixme:") !== 0) {
-            var lineObj = {text: line};
-            var match = line.match(re);
-            if (match) {
-                lineObj.tag = {line: parseInt(match[1]), text: match[3].trim()};
-            }
-            result.push(lineObj);
-        }
+    it('Should filter bad options', function () {
+        ce.findBadOptions(['-O3', '-flto']).should.be.empty;
+        ce.findBadOptions(['-O3', '-plugin']).should.eql(['-plugin']);
     });
-    return result;
-}
-
-exports.parseOutput = parseOutput;
+});
