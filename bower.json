@@ -1,12 +1,12 @@
 {
-  "name": "gcc-explorer",
+  "name": "compiler-explorer",
   "description": "Interactively investigate compiler output",
   "main": "./app.js",
   "authors": [
     "Matt Godbolt"
   ],
   "license": "BSD-2-Clause",
-  "homepage": "https://github.com/mattgodbolt/gcc-explorer",
+  "homepage": "https://github.com/mattgodbolt/compiler-explorer",
   "private": true,
   "ignore": [
     "**/.*",
@@ -27,6 +27,7 @@
     "lz-string": "^1.4.4",
     "clipboard": "^1.5.12",
     "raven-js": "^3.7.0",
-    "es6-promise": "^4.0.5"
+    "es6-promise": "^4.0.5",
+    "lru-cache": "2.7.3"
   }
 }
