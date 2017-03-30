@@ -425,18 +425,16 @@ function ApiHandler(compileHandler) {
     var exec = require('./lib/exec');
     this.handler.post('/format/clang-format-3.8', function (req, res) {
         res.setHeader('Content-Type', 'application/json');
-        var style = "";
+        var style = "Google";  // Default style
         if (req.body.base && req.body.base !== "None") {
             if (req.body.overrides) {
-                style = "{BasedOnStyle: " + req.body.base + "," + req.body.overrides + "}";
+                style = '{"BasedOnStyle": ' + req.body.base + ', ' + req.body.overrides + '}';
             } else {
                 style = req.body.base;
             }
         } else {
             if (req.body.overrides) {
                 style = "{" + req.body.overrides + "}";
-            } else {
-                style = "Google";
             }
         }
         var response = {};
@@ -445,16 +443,12 @@ function ApiHandler(compileHandler) {
             input: req.body.source,
         }).then(function (result) {
             response.exit = result.code;
-            if (result.code === 0) {
-                response.answer = result.stdout;
-            } else {
-                response.answer = "Clang did not succeed";
-            }
+            response.answer = result.code === 0 ? result.stdout : "Clang did not succeed";
             res.end(JSON.stringify(response));
         }).catch(function (ex) {
             response.exit = -1;
             response.thrown = true;
-            response.answer = "Exception thrown";
+            response.answer = ex.message;
             res.end(JSON.stringify(response));
         });
     });

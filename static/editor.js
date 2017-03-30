@@ -153,16 +153,22 @@ define(function (require) {
                 run: function (ed) {
                     self.sourceOnFormat = self.getSource();
                     var position = ed.getPosition();
-                    self.handleThinkingGear(true, "Formatting your code. If you change anything in the meanwhile, you will have to choose what to do.");
+                    self.handleThinkingGear(true, {
+                        tooltipText: "Your code is being formatted. If you change anything in the meanwhile, you will have to decide what to do.",
+                        doFade: false,
+                        holdTime: 250
+                    });
                     // Let the user know we're formmating and that if it changes anything, we will ask what to do.
                     $.ajax({
                         type: 'POST',
                         url: 'api/format/clang-format-3.8',
                         dataType: 'json',  // Expected
                         contentType: 'application/json',  // Sent
-                        data: JSON.stringify({"source": self.sourceOnFormat,
-                                "base": self.settings.formatBase,
-                                "overrides": self.settings.formatOverrides}),
+                        data: JSON.stringify({
+                            "source": self.sourceOnFormat,
+                            "base": self.settings.formatBase,
+                            "overrides": self.settings.formatOverrides
+                        }),
                         success: _.bind(function (result) {
                             if (result.exit === 0) {
                                 if (self.sourceOnFormat === self.getSource()) {
@@ -171,19 +177,40 @@ define(function (require) {
                                     new Alert().ask("Changes were made to the code",
                                                     "Changes were made to the code while it was being formatted. What should be done?",
                                                     {"yes": function() {self.setSource(result.answer);}, "no": function () {}},
-                                                    {"yes": "Overwrite my changes", "no": "Keep my changes"});                        
+                                                    {"yes": "Overwrite my changes", "no": "Keep my changes"});
                                 }
                                 self.numberUsedLines();
                                 self.editor.setPosition(position);
-                                self.handleThinkingGear(false);
+                                self.handleThinkingGear(false, {
+                                    doFade: true,
+                                    style: "color:green",
+                                    tooltipText: "Text formatted sucesfuly",
+                                    holdTime: 75
+                                });
                             } else {
                                 // Ops
-                                self.handleThinkingGear(false);
+                                new Alert().notify("We found an error formatting your code:<br>" + result.answer, {
+                                    group: "formatting",
+                                    alertClass: "notification-error",
+                                });
+                                self.handleThinkingGear(false, {
+                                    doFade: true,
+                                    style: "color:red",
+                                    tooltipText: "Error formatting your code"
+                                });
                             }
                         }, this),
                         error: _.bind(function (xhr, e_status, error) {
                             // Hopefully we have not exploded!
-                            self.handleThinkingGear(false);
+                            new Alert().notify("We ran into some issues while processing your request:<br>" + error, {
+                                group: "formatting",
+                                alertClass: "notification-error",
+                            });
+                            self.handleThinkingGear(false, {
+                                doFade: true,
+                                style: "color:red",
+                                tooltipText: "Error formatting your code"
+                            });
                         }, this),
                         cache: false
                     });
@@ -427,16 +454,40 @@ define(function (require) {
         }
     };
 
-    Editor.prototype.handleThinkingGear = function (doShow, tooltipText) {
-        if (doShow) {
-            this.domRoot.find('.thinking')
-                .attr("title", tooltipText || "")
-                .addClass("gly-spin")
-                .show();
+    Editor.prototype.handleThinkingGear = function (newState, options) {
+        var thinkingGear = this.domRoot.find('.thinking');
+        if (!thinkingGear) return;
+        if (!options) options = {};
+        // Parameters...
+        options.tooltipText = ("tooltipText" in options) ? options.tooltipText : "";
+        options.doFade = ("doFade" in options) ? options.doFade : true;
+        options.style = ("style" in options) ? options.style : "";
+        options.holdTime = ("holdTime" in options) ? Math.max(250, options.holdTime) : 1000;
+        // Clear previous styles
+        thinkingGear.removeAttr("style");
+        thinkingGear.attr("style", options.style);
+        thinkingGear.attr("title", options.tooltipText);
+        if (newState) {
+            thinkingGear.addClass("gly-spin");
+            setTimeout(function() {
+                if (options.doFade) {
+                    thinkingGear.fadeIn("slow");
+                } else {
+                    thinkingGear.show();
+                }
+            }, options.holdTime);
         } else {
-            this.domRoot.find('.thinking')
-                .removeClass("gly-spin")
-                .hide();
+            // We stop rotating when we're not seen any more. Different for each case.
+            setTimeout(function() {
+                if (options.doFade) {
+                    thinkingGear.fadeOut("slow", function() {
+                        thinkingGear.removeClass("gly-spin");
+                    });
+                } else {
+                    thinkingGear.hide();
+                    thinkingGear.removeClass("gly-spin");
+                }
+            }, options.holdTime);
         }
     };
 
