@@ -24,22 +24,21 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
 // POSSIBILITY OF SUCH DAMAGE.
 
-// load external and internal libraries (will load more internal binaries later)
+// Initialise options and properties. Don't load any handlers here; they
+// may need an initialised properties library.
 var nopt = require('nopt'),
     os = require('os'),
     props = require('./lib/properties'),
-    CompileHandler = require('./lib/compile-handler').CompileHandler,
-    express = require('express'),
     child_process = require('child_process'),
     path = require('path'),
     fs = require('fs-extra'),
     http = require('http'),
     https = require('https'),
     url = require('url'),
-    utils = require('./lib/utils'),
     Promise = require('promise'),
-    aws = require('./lib/aws'),
     _ = require('underscore-node'),
+    utils = require('./lib/utils'),
+    express = require('express'),
     logger = require('./lib/logger').logger;
 
 // Parse arguments from command line 'node ./app.js args...'
@@ -87,6 +86,13 @@ if (opts.propDebug) props.setDebug(true);
 
 // *All* files in config dir are parsed 
 props.initialize(rootDir + '/config', propHierarchy);
+
+// Now load up our libraries.
+var CompileHandler = require('./lib/compile-handler').CompileHandler,
+    aws = require('./lib/aws'),
+    asm_doc_api = require('./lib/asm-docs-api'),
+    formatterApi = require('./lib/format-api');
+
 
 // Instantiate a function to access records concerning "compiler-explorer" 
 // in hidden object props.properties
@@ -405,6 +411,11 @@ function ApiHandler(compileHandler) {
         this.compilers = compilers;
     };
     this.handler = express.Router();
+    this.handler.use(function (req, res, next) {
+        res.header("Access-Control-Allow-Origin", "*");
+        res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+        next();
+    });
     this.handler.get('/compilers', _.bind(function (req, res, next) {
         if (req.accepts(['text', 'json']) == 'json') {
             res.set('Content-Type', 'application/json');
@@ -419,39 +430,9 @@ function ApiHandler(compileHandler) {
             }).join("\n"));
         }
     }, this));
-     // ---- this whole thing should be in a separate file etc, proof of concept only
-    // TODO: we'll need something smarter than this; URLs are long-lived and we nede
-    // to think about it; languages...formatters...etc.maybe something like:
-    var exec = require('./lib/exec');
-    this.handler.post('/format/clang-format-3.8', function (req, res) {
-        res.setHeader('Content-Type', 'application/json');
-        var style = "Google";  // Default style
-        if (req.body.base && req.body.base !== "None") {
-            if (req.body.overrides) {
-                style = '{"BasedOnStyle": ' + req.body.base + ', ' + req.body.overrides + '}';
-            } else {
-                style = req.body.base;
-            }
-        } else {
-            if (req.body.overrides) {
-                style = "{" + req.body.overrides + "}";
-            }
-        }
-        var response = {};
-        response.style = style;
-        exec.execute('/usr/bin/clang-format-3.8', ["-style=" + style], {
-            input: req.body.source,
-        }).then(function (result) {
-            response.exit = result.code;
-            response.answer = result.code === 0 ? result.stdout : "Clang did not succeed";
-            res.end(JSON.stringify(response));
-        }).catch(function (ex) {
-            response.exit = -1;
-            response.thrown = true;
-            response.answer = ex.message;
-            res.end(JSON.stringify(response));
-        });
-    });
+    this.handler.post('/format/:tool', formatterApi.formatterHandler);
+    this.handler.get('/formatters', formatterApi.listerHandler);
+    this.handler.get('/asm/:opcode', asm_doc_api.asmDocsHandler);
     this.handler.param('compiler', _.bind(function (req, res, next, compilerName) {
         req.compiler = compilerName;
         next();
