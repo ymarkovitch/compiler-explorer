@@ -58,8 +58,6 @@ define(function (require) {
 
         this.decorations = [];
 
-        this.sourceOnFormat = "";
-
         var cmMode;
         switch (lang.toLowerCase()) {
             default:
@@ -151,71 +149,7 @@ define(function (require) {
                 keybindingContext: null,
                 contextMenuGroupId: 'help',
                 contextMenuOrder: 1.5,
-                run: function (ed) {
-                    self.sourceOnFormat = self.getSource();
-                    var position = ed.getPosition();
-                    self.handleThinkingGear(true, {
-                        tooltipText: "Your code is being formatted. If you change anything in the meanwhile, you will have to decide what to do.",
-                        doFade: false,
-                        holdTime: 250
-                    });
-                    // Let the user know we're formmating and that if it changes anything, we will ask what to do.
-                    $.ajax({
-                        type: 'POST',
-                        url: 'api/format/clang-format-3.8',
-                        dataType: 'json',  // Expected
-                        contentType: 'application/json',  // Sent
-                        data: JSON.stringify({
-                            "source": self.sourceOnFormat,
-                            "base": self.settings.formatBase,
-                            "overrides": self.settings.formatOverrides
-                        }),
-                        success: _.bind(function (result) {
-                            if (result.exit === 0) {
-                                if (self.sourceOnFormat === self.getSource()) {
-                                    self.setSource(result.answer);
-                                } else {
-                                    new Alert().ask("Changes were made to the code",
-                                                    "Changes were made to the code while it was being formatted. What should be done?",
-                                                    {"yes": function() {self.setSource(result.answer);}, "no": function () {}},
-                                                    {"yes": "Overwrite my changes", "no": "Keep my changes"});
-                                }
-                                self.numberUsedLines();
-                                self.editor.setPosition(position);
-                                self.handleThinkingGear(false, {
-                                    doFade: true,
-                                    style: "color:green",
-                                    tooltipText: "Text formatted sucesfuly",
-                                    holdTime: 75
-                                });
-                            } else {
-                                // Ops
-                                new Alert().notify("We found an error formatting your code:<br>" + result.answer, {
-                                    group: "formatting",
-                                    alertClass: "notification-error",
-                                });
-                                self.handleThinkingGear(false, {
-                                    doFade: true,
-                                    style: "color:red",
-                                    tooltipText: "Error formatting your code"
-                                });
-                            }
-                        }, this),
-                        error: _.bind(function (xhr, e_status, error) {
-                            // Hopefully we have not exploded!
-                            new Alert().notify("We ran into some issues while processing your request:<br>" + error, {
-                                group: "formatting",
-                                alertClass: "notification-error",
-                            });
-                            self.handleThinkingGear(false, {
-                                doFade: true,
-                                style: "color:red",
-                                tooltipText: "Error formatting your code"
-                            });
-                        }, this),
-                        cache: false
-                    });
-                }
+                run: _.bind(this.formatCurrentText, this)
             });
         }
 
@@ -453,6 +387,73 @@ define(function (require) {
                         }
                     ]);
         }
+    };
+
+    Editor.prototype.formatCurrentText = function (ed) {
+        var sourceOnFormat = this.getSource();
+        var position = ed.getPosition();
+        this.handleThinkingGear(true, {
+            tooltipText: "Your code is being formatted. If you change anything in the meanwhile, you will have to decide what to do.",
+            doFade: false,
+            holdTime: 250
+        });
+        // Let the user know we're formmating and that if it changes anything, we will ask what to do.
+        $.ajax({
+            type: 'POST',
+            url: 'api/format/clang',
+            dataType: 'json',  // Expected
+            contentType: 'application/json',  // Sent
+            data: JSON.stringify({
+                "version": "3.8",
+                "source": sourceOnFormat,
+                "base": this.settings.formatBase,
+                "overrides": this.settings.formatOverrides
+            }),
+            success: _.bind(function (result) {
+                if (result.exit === 0) {
+                    if (sourceOnFormat === this.getSource()) {
+                        this.setSource(result.answer);
+                    } else {
+                        new Alert().ask("Changes were made to the code",
+                                        "Changes were made to the code while it was being formatted. What should be done?",
+                                        {"yes": function() {this.setSource(result.answer);}, "no": function () {}},
+                                        {"yes": "Overwrite my changes", "no": "Keep my changes"});
+                    }
+                    this.numberUsedLines();
+                    this.editor.setPosition(position);
+                    this.handleThinkingGear(false, {
+                        doFade: true,
+                        style: "color:green",
+                        tooltipText: "Text formatted sucesfuly",
+                        holdTime: 75
+                    });
+                } else {
+                    // Ops
+                    new Alert().notify("We found an error formatting your code:<br>" + result.answer, {
+                        group: "formatting",
+                        alertClass: "notification-error",
+                    });
+                    this.handleThinkingGear(false, {
+                        doFade: true,
+                        style: "color:red",
+                        tooltipText: "Error formatting your code"
+                    });
+                }
+            }, this),
+            error: _.bind(function (xhr, e_status, error) {
+                // Hopefully we have not exploded!
+                new Alert().notify("We ran into some issues while processing your request:<br>" + error, {
+                    group: "formatting",
+                    alertClass: "notification-error",
+                });
+                this.handleThinkingGear(false, {
+                    doFade: true,
+                    style: "color:red",
+                    tooltipText: "Error formatting your code"
+                });
+            }, this),
+            cache: false
+        });
     };
 
     Editor.prototype.handleThinkingGear = function (newState, options) {
