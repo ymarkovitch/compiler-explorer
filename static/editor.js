@@ -397,7 +397,6 @@ define(function (require) {
             doFade: false,
             holdTime: 250
         });
-        // Let the user know we're formmating and that if it changes anything, we will ask what to do.
         $.ajax({
             type: 'POST',
             url: 'api/format/clang',
