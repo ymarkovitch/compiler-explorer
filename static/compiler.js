@@ -274,6 +274,7 @@ define(function (require) {
 
     Compiler.prototype.getBinaryForLine = function (line) {
         var obj = this.assembly[line - 1];
+        if (!obj) return '<div class="address">????</div><div class="opcodes"><span class="opcode">????</span></div>';
         var address = obj.address ? obj.address.toString(16) : "";
         var opcodes = '<div class="opcodes" title="' + (obj.opcodes || []).join(" ") + '">';
         _.each(obj.opcodes, function (op) {
@@ -630,7 +631,7 @@ define(function (require) {
             _.bind(function (asmHelp) {
                 if (asmHelp) {
                     new Alert().alert(opcode + " help", asmHelp.html +
-                        '<br><br>For more information, visit <a href="http://www.felixcloutier.com/x86/' + asmHelp.url + '" target="_blank" rel="noopener noreferrer">the ' +
+                        '<br><br>For more information, visit <a href="' + asmHelp.url + '" target="_blank" rel="noopener noreferrer">the ' +
                         opcode + ' documentation <span class="glyphicon glyphicon-new-window" width="16px" height="16px" title="Opens in a new window"/></span></a>.',
                         function () {
                             ed.focus();

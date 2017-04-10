@@ -152,5 +152,4 @@ define(function (require) {
     }
 
     return setupSettings;
-})
-;
+});
