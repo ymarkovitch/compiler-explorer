@@ -56,6 +56,7 @@ define(function (require) {
         this.compilers = {};
 
         this.outputEditor = monaco.editor.createDiffEditor(this.domRoot.find(".monaco-placeholder")[0], {
+            fontFamily: 'Fira Mono',
             scrollBeyondLastLine: false,
             readOnly: true,
             language: 'asm'
@@ -104,7 +105,7 @@ define(function (require) {
         this.eventHub.on('compileResult', this.onCompileResult, this);
         this.eventHub.on('compiler', this.onCompiler, this);
         this.eventHub.on('compilerClose', this.onCompilerClose, this);
-
+        this.eventHub.on('themeChange', this.onThemeChange, this);
         this.container.on('destroy', function () {
             this.eventHub.unsubscribe();
             this.outputEditor.dispose();
@@ -115,6 +116,7 @@ define(function (require) {
         this.eventHub.emit('resendCompilation', this.lhs.id);
         this.eventHub.emit('resendCompilation', this.rhs.id);
         this.eventHub.emit('findCompilers');
+        this.eventHub.emit('requestTheme');
 
         this.updateCompilerNames();
         this.updateCompilers();
@@ -207,6 +209,11 @@ define(function (require) {
         };
         this.fontScale.addState(state);
         this.container.setState(state);
+    };
+
+    Diff.prototype.onThemeChange = function (newTheme) {
+        if (this.outputEditor)
+            this.outputEditor.updateOptions({theme: newTheme.monaco});
     };
 
     return {

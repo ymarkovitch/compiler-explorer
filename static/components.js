@@ -23,7 +23,7 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-define(function (require) {
+define(function () {
     "use strict";
     // here instead of in the editor.js and compiler.js etc to prevent circular dependencies.
     return {
@@ -72,6 +72,20 @@ define(function (require) {
                 type: 'component',
                 componentName: 'diff',
                 componentState: {}
+            };
+        },
+        getOptView: function() {
+            return {
+                type: 'component',
+                componentName: 'opt',
+                componentState: {}
+            };
+        },
+        getOptViewWith: function (id, source, optimization, compilerName, editorid) {
+            return {
+                type: 'component',
+                componentName: 'opt',
+                componentState: {id: id, source: source, optOutput: optimization, compilerName: compilerName, editorid: editorid}
             };
         }
     };

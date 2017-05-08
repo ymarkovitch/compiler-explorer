@@ -35,18 +35,21 @@ require.config({
         events: 'ext/eventEmitter/EventEmitter',
         lzstring: 'ext/lz-string/libs/lz-string',
         clipboard: 'ext/clipboard/dist/clipboard',
+        'big-integer': 'ext/big-integer/BigInteger.min',
         'raven-js': 'ext/raven-js/dist/raven',
         'es6-promise': 'ext/es6-promise/es6-promise',
         'lru-cache': 'ext/lru-cache/lib/lru-cache',
-        'vs': "ext/monaco-editor/min/vs",
-        'bootstrap-slider': 'ext/seiyria-bootstrap-slider/dist/bootstrap-slider'
+        vs: "ext/monaco-editor/min/vs",
+        'bootstrap-slider': 'ext/seiyria-bootstrap-slider/dist/bootstrap-slider',
+        filesaver: 'ext/file-saver/FileSaver'
     },
     shim: {
         underscore: {exports: '_'},
         'lru-cache': {exports: 'LRUCache'},
         bootstrap: ['jquery'],
         'bootstrap-slider': ['bootstrap']
-    }
+    },
+    waitSeconds: 60
 });
 
 define(function (require) {
@@ -66,6 +69,7 @@ define(function (require) {
     var settings = require('./settings');
     var local = require('./local');
     var Alert = require('./alert');
+    var themer = require('./themes');
 
     function setupSettings(eventHub) {
         var currentSettings = JSON.parse(local.get('settings', '{}'));
@@ -75,6 +79,8 @@ define(function (require) {
             local.set('settings', JSON.stringify(settings));
             eventHub.emit('settingsChange', settings);
         }
+
+        new themer.Themer(eventHub, currentSettings);
 
         eventHub.on('requestSettings', function () {
             eventHub.emit('settingsChange', currentSettings);
@@ -180,7 +186,6 @@ define(function (require) {
         setupAdd($('#add-editor'), function () {
             return Components.getEditor();
         });
-
         $('#ui-reset').click(function () {
             local.remove('gl');
             window.location.reload();
