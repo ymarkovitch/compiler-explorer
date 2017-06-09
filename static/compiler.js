@@ -91,6 +91,11 @@ define(function (require) {
             options: compilers,
             items: this.compiler ? [this.compiler.id] : []
         }).on('change', function () {
+            ga('send', {
+                hitType: 'event',
+                eventCategory: 'SelectCompiler',
+                eventAction: request.compiler
+            });
             self.onCompilerChange($(this).val());
         });
         var optionsChange = _.debounce(function () {
@@ -292,14 +297,13 @@ define(function (require) {
     };
 
 
-
     Compiler.prototype.compile = function () {
         var shouldProduceAst = this.astViewOpen;
         var request = {
             source: this.source || "",
             compiler: this.compiler ? this.compiler.id : "",
             options: this.options,
-            backendOptions: { produceAst: shouldProduceAst },
+            backendOptions: {produceAst: shouldProduceAst},
             filters: this.getEffectiveFilters()
         };
 
@@ -734,15 +738,17 @@ define(function (require) {
         var currentWord = this.outputEditor.getModel().getWordAtPosition(e.target.position);
         if (currentWord && currentWord.word) {
             var word = currentWord.word;
+            currentWord.range = new monaco.Range(e.target.position.lineNumber, currentWord.startColumn, e.target.position.lineNumber, currentWord.endColumn);
             // Hacky workaround to check for negative numbers. c.f. https://github.com/mattgodbolt/compiler-explorer/issues/434
             var lineContent = this.outputEditor.getModel().getLineContent(e.target.position.lineNumber);
             if (lineContent[currentWord.startColumn - 2] === '-') {
                 word = '-' + word;
+                currentWord.range.startColumn -= 1;
             }
             var numericToolTip = getNumericToolTip(word);
             if (numericToolTip) {
                 this.decorations.numericToolTip = {
-                    range: e.target.range,
+                    range: currentWord.range,
                     options: {isWholeLine: false, hoverMessage: ['`' + numericToolTip + '`']}
                 };
                 this.updateDecorations();
@@ -752,7 +758,7 @@ define(function (require) {
                 getAsmInfo(currentWord.word).then(_.bind(function (response) {
                     if (response) {
                         this.decorations.asmToolTip = {
-                            range: e.target.range,
+                            range: currentWord.range,
                             options: {
                                 isWholeLine: false,
                                 hoverMessage: [response.tooltip + "\n\nMore information available in the context menu."]
