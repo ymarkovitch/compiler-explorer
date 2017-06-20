@@ -16,305 +16,277 @@
     "text": "regexTest PROC"
   },
   {
-    "source": null,
-    "text": ""
-  },
-  {
     "opcodes": [
-      72,
-      131,
-      236,
-      120
+      "48",
+      "83",
+      "ec",
+      "78"
     ],
     "address": 0,
     "source": 5,
-    "text": "  sub    rsp, 120       ; 00000078H"
-  },
-  {
-    "source": null,
-    "text": ""
+    "text": "        sub      rsp, 120   ; 00000078H"
   },
   {
     "opcodes": [
-      72,
-      139,
-      5,
-      0,
-      0,
-      0,
-      0
+      "48",
+      "8b",
+      "05",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 4,
     "source": 5,
-    "text": "  mov    rax, QWORD PTR __security_cookie"
+    "text": "        mov      rax, QWORD PTR __security_cookie"
   },
   {
     "opcodes": [
-      72,
-      51,
-      196
+      "48",
+      "33",
+      "c4"
     ],
     "address": 11,
     "source": 5,
-    "text": "  xor    rax, rsp"
+    "text": "        xor      rax, rsp"
   },
   {
     "opcodes": [
-      72,
-      137,
-      68,
-      36,
-      104
+      "48",
+      "89",
+      "44",
+      "24",
+      "68"
     ],
     "address": 14,
     "source": 5,
-    "text": "  mov    QWORD PTR __$ArrayPad$[rsp], rax"
-  },
-  {
-    "source": null,
-    "text": ""
+    "text": "        mov      QWORD PTR __$ArrayPad$[rsp], rax"
   },
   {
     "opcodes": [
-      72,
-      141,
-      21,
-      0,
-      0,
-      0,
-      0
+      "48",
+      "8d",
+      "15",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 19,
     "source": 6,
-    "text": "  lea    rdx, OFFSET FLAT:$SG44257"
+    "text": "        lea      rdx, OFFSET FLAT:$SG44257"
   },
   {
     "opcodes": [
-      72,
-      141,
-      76,
-      36,
-      72
+      "48",
+      "8d",
+      "4c",
+      "24",
+      "48"
     ],
     "address": 26,
     "source": 6,
-    "text": "  lea    rcx, QWORD PTR s$[rsp]"
+    "text": "        lea      rcx, QWORD PTR s$[rsp]"
   },
   {
     "opcodes": [
-      232,
-      0,
-      0,
-      0,
-      0
+      "e8",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 31,
     "source": 6,
-    "text": "  call   std::basic_string<char,std::char_traits<char>,std::allocator<char> >::basic_string<char,std::char_traits<char>,std::allocator<char> >"
-  },
-  {
-    "source": null,
-    "text": ""
+    "text": "        call     std::basic_string<char,std::char_traits<char>,std::allocator<char> >::basic_string<char,std::char_traits<char>,std::allocator<char> >"
   },
   {
     "opcodes": [
-      186,
-      0,
-      1,
-      0,
-      0
+      "ba",
+      "00",
+      "01",
+      "00",
+      "00"
     ],
     "address": 36,
     "source": 9,
-    "text": "  mov    edx, 256       ; 00000100H"
+    "text": "        mov      edx, 256   ; 00000100H"
   },
   {
     "opcodes": [
-      185,
-      1,
-      0,
-      0,
-      0
+      "b9",
+      "01",
+      "00",
+      "00",
+      "00"
     ],
     "address": 41,
     "source": 9,
-    "text": "  mov    ecx, 1"
+    "text": "        mov      ecx, 1"
   },
   {
     "opcodes": [
-      232,
-      0,
-      0,
-      0,
-      0
+      "e8",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 46,
     "source": 9,
-    "text": "  call   std::regex_constants::operator|"
+    "text": "        call     std::regex_constants::operator|"
   },
   {
     "opcodes": [
-      68,
-      139,
-      192
+      "44",
+      "8b",
+      "c0"
     ],
     "address": 51,
     "source": 9,
-    "text": "  mov    r8d, eax"
-  },
-  {
-    "source": null,
-    "text": ""
+    "text": "        mov      r8d, eax"
   },
   {
     "opcodes": [
-      72,
-      141,
-      21,
-      0,
-      0,
-      0,
-      0
+      "48",
+      "8d",
+      "15",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 54,
     "source": 9,
-    "text": "  lea    rdx, OFFSET FLAT:$SG44258"
+    "text": "        lea      rdx, OFFSET FLAT:$SG44258"
   },
   {
     "opcodes": [
-      72,
-      141,
-      76,
-      36,
-      32
+      "48",
+      "8d",
+      "4c",
+      "24",
+      "20"
     ],
     "address": 61,
     "source": 9,
-    "text": "  lea    rcx, QWORD PTR self_regex$[rsp]"
+    "text": "        lea      rcx, QWORD PTR self_regex$[rsp]"
   },
   {
     "opcodes": [
-      232,
-      0,
-      0,
-      0,
-      0
+      "e8",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 66,
     "source": 9,
-    "text": "  call   std::basic_regex<char,std::regex_traits<char> >::basic_regex<char,std::regex_traits<char> >"
-  },
-  {
-    "source": null,
-    "text": ""
+    "text": "        call     std::basic_regex<char,std::regex_traits<char> >::basic_regex<char,std::regex_traits<char> >"
   },
   {
     "opcodes": [
-      72,
-      141,
-      76,
-      36,
-      32
+      "48",
+      "8d",
+      "4c",
+      "24",
+      "20"
     ],
     "address": 71,
     "source": 11,
-    "text": "  lea    rcx, QWORD PTR self_regex$[rsp]"
+    "text": "        lea      rcx, QWORD PTR self_regex$[rsp]"
   },
   {
     "opcodes": [
-      232,
-      0,
-      0,
-      0,
-      0
+      "e8",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 76,
     "source": 11,
-    "text": "  call   std::basic_regex<char,std::regex_traits<char> >::~basic_regex<char,std::regex_traits<char> >"
+    "text": "        call     std::basic_regex<char,std::regex_traits<char> >::~basic_regex<char,std::regex_traits<char> >"
   },
   {
     "opcodes": [
-      72,
-      141,
-      76,
-      36,
-      72
+      "48",
+      "8d",
+      "4c",
+      "24",
+      "48"
     ],
     "address": 81,
     "source": 11,
-    "text": "  lea    rcx, QWORD PTR s$[rsp]"
+    "text": "        lea      rcx, QWORD PTR s$[rsp]"
   },
   {
     "opcodes": [
-      232,
-      0,
-      0,
-      0,
-      0
+      "e8",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 86,
     "source": 11,
-    "text": "  call   std::basic_string<char,std::char_traits<char>,std::allocator<char> >::~basic_string<char,std::char_traits<char>,std::allocator<char> >"
+    "text": "        call     std::basic_string<char,std::char_traits<char>,std::allocator<char> >::~basic_string<char,std::char_traits<char>,std::allocator<char> >"
   },
   {
     "opcodes": [
-      72,
-      139,
-      76,
-      36,
-      104
+      "48",
+      "8b",
+      "4c",
+      "24",
+      "68"
     ],
     "address": 91,
     "source": 11,
-    "text": "  mov    rcx, QWORD PTR __$ArrayPad$[rsp]"
+    "text": "        mov      rcx, QWORD PTR __$ArrayPad$[rsp]"
   },
   {
     "opcodes": [
-      72,
-      51,
-      204
+      "48",
+      "33",
+      "cc"
     ],
     "address": 96,
     "source": 11,
-    "text": "  xor    rcx, rsp"
+    "text": "        xor      rcx, rsp"
   },
   {
     "opcodes": [
-      232,
-      0,
-      0,
-      0,
-      0
+      "e8",
+      "00",
+      "00",
+      "00",
+      "00"
     ],
     "address": 99,
     "source": 11,
-    "text": "  call   __security_check_cookie"
+    "text": "        call     __security_check_cookie"
   },
   {
     "opcodes": [
-      72,
-      131,
-      196,
-      120
+      "48",
+      "83",
+      "c4",
+      "78"
     ],
     "address": 104,
     "source": 11,
-    "text": "  add    rsp, 120       ; 00000078H"
+    "text": "        add      rsp, 120   ; 00000078H"
   },
   {
     "opcodes": [
-      195
+      "c3"
     ],
     "address": 108,
     "source": 11,
-    "text": "  ret    0"
+    "text": "        ret      0"
   },
   {
     "source": null,
     "text": "regexTest ENDP"
-  },
-  {
-    "source": null,
-    "text": ""
   }
 ]

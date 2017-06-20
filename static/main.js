@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2016, Matt Godbolt
+// Copyright (c) 2012-2017, Matt Godbolt
 //
 // All rights reserved.
 // 
@@ -35,86 +35,126 @@ require.config({
         events: 'ext/eventEmitter/EventEmitter',
         lzstring: 'ext/lz-string/libs/lz-string',
         clipboard: 'ext/clipboard/dist/clipboard',
+        'big-integer': 'ext/big-integer/BigInteger.min',
         'raven-js': 'ext/raven-js/dist/raven',
-        'es6-promise': 'ext/es6-promise/es6-promise'
+        'es6-promise': 'ext/es6-promise/es6-promise',
+        'lru-cache': 'ext/lru-cache/lib/lru-cache',
+        vs: "ext/monaco-editor/min/vs",
+        'bootstrap-slider': 'ext/seiyria-bootstrap-slider/dist/bootstrap-slider',
+        filesaver: 'ext/file-saver/FileSaver'
     },
-    packages: [{
-        name: "codemirror",
-        location: "ext/codemirror",
-        main: "lib/codemirror"
-    }],
     shim: {
         underscore: {exports: '_'},
-        bootstrap: ['jquery']
-    }
+        'lru-cache': {exports: 'LRUCache'},
+        bootstrap: ['jquery'],
+        'bootstrap-slider': ['bootstrap']
+    },
+    waitSeconds: 60
 });
 
 define(function (require) {
     "use strict";
     require('bootstrap');
+    require('bootstrap-slider');
     var analytics = require('analytics');
     var sharing = require('sharing');
     var _ = require('underscore');
     var $ = require('jquery');
     var GoldenLayout = require('goldenlayout');
-    var compiler = require('compiler');
-    var editor = require('editor');
+    var Components = require('components');
     var url = require('url');
     var clipboard = require('clipboard');
     var Hub = require('hub');
-    var shortenURL = require('urlshorten-google');
     var Raven = require('raven-js');
+    var settings = require('./settings');
+    var local = require('./local');
+    var Alert = require('./alert');
+    var themer = require('./themes');
+
+    function setupSettings(eventHub) {
+        var currentSettings = JSON.parse(local.get('settings', '{}'));
+
+        function onChange(settings) {
+            currentSettings = settings;
+            local.set('settings', JSON.stringify(settings));
+            eventHub.emit('settingsChange', settings);
+        }
+
+        new themer.Themer(eventHub, currentSettings);
+
+        eventHub.on('requestSettings', function () {
+            eventHub.emit('settingsChange', currentSettings);
+        });
+
+        var setSettings = settings($('#settings'), currentSettings, onChange);
+        eventHub.on('modifySettings', function (newSettings) {
+            setSettings(_.extend(currentSettings, newSettings));
+        });
+    }
 
     function start() {
         analytics.initialise();
-        sharing.initialise();
 
         var options = require('options');
-        $('.language-name').text(options.language);
 
-        var safeLang = options.language.toLowerCase().replace(/[^a-z_]+/g, '');
-        var defaultSrc = $('.template .lang.' + safeLang).text().trim();
+        var defaultSrc = $('.template .lang').text().trim();
         var defaultConfig = {
             settings: {showPopoutIcon: false},
-            content: [{type: 'row', content: [editor.getComponent(1), compiler.getComponent(1)]}]
+            content: [{type: 'row', content: [Components.getEditor(1), Components.getCompiler(1)]}]
         };
-        var root = $("#root");
-        var config = url.deserialiseState(window.location.hash.substr(1));
-        if (config) {
-            // replace anything in the default config with that from the hash
-            config = _.extend(defaultConfig, config);
-        }
+
         $(window).bind('hashchange', function () {
             // punt on hash events and just reload the page if there's a hash
             if (window.location.hash.substr(1))
                 window.location.reload();
         });
 
-        if (!config) {
-            var savedState = null;
-            try {
-                savedState = window.localStorage.getItem('gl');
-            } catch (e) {
-                // Some browsers in secure modes can throw exceptions here...
+        var config;
+        if (!options.embedded) {
+            config = url.deserialiseState(window.location.hash.substr(1));
+            if (config) {
+                // replace anything in the default config with that from the hash
+                config = _.extend(defaultConfig, config);
             }
-            config = savedState !== null ? JSON.parse(savedState) : defaultConfig;
+
+            if (!config) {
+                var savedState = local.get('gl', null);
+                config = savedState !== null ? JSON.parse(savedState) : defaultConfig;
+            }
+        } else {
+            config = _.extend(defaultConfig,
+                {
+                    settings: {
+                        showMaximiseIcon: false,
+                        showCloseIcon: false,
+                        hasHeaders: false
+                    }
+                },
+                sharing.configFromEmbedded(window.location.hash.substr(1)));
         }
 
+        var root = $("#root");
+
         var layout;
+        var hub;
         try {
             layout = new GoldenLayout(config, root);
-            new Hub(layout, defaultSrc);
+            hub = new Hub(layout, defaultSrc);
         } catch (e) {
             Raven.captureException(e);
             layout = new GoldenLayout(defaultConfig, root);
-            new Hub(layout, defaultSrc);
+            hub = new Hub(layout, defaultSrc);
         }
         layout.on('stateChanged', function () {
-            var state = JSON.stringify(layout.toConfig());
-            try {
-                window.localStorage.setItem('gl', state);
-            } catch (e) {
-                // Some browsers in secure modes may throw
+            var config = layout.toConfig();
+            // Only preserve state in localStorage in non-embedded mode.
+            if (!options.embedded) {
+                local.set('gl', JSON.stringify(config));
+            } else {
+                var strippedToLast = window.location.pathname;
+                strippedToLast = strippedToLast.substr(0,
+                    strippedToLast.lastIndexOf('/') + 1);
+                $('a.link').attr('href', strippedToLast + '#' + url.serialiseState(config));
             }
         });
 
@@ -129,49 +169,31 @@ define(function (require) {
 
         new clipboard('.btn.clippy');
 
-        function initPopover(getLink, provider) {
-            var html = $('.template .urls').html();
+        setupSettings(layout.eventHub);
 
-            getLink.popover({
-                container: 'body',
-                content: html,
-                html: true,
-                placement: 'bottom',
-                trigger: 'manual'
-            }).click(function () {
-                getLink.popover('show');
-            }).on('inserted.bs.popover', function () {
-                provider(function (url) {
-                    $(".permalink:visible").val(url);
-                });
-            });
+        sharing.initShareButton($('#share'), layout);
 
-            // Dismiss the popover on escape.
-            $(document).on('keyup.editable', function (e) {
-                if (e.which === 27) {
-                    getLink.popover("hide");
-                }
-            });
-
-            // Dismiss on any click that isn't either on the opening element, or inside
-            // the popover.
-            $(document).on('click.editable', function (e) {
-                var target = $(e.target);
-                if (!target.is(getLink) && target.closest('.popover').length === 0)
-                    getLink.popover("hide");
+        function setupAdd(thing, func) {
+            layout.createDragSource(thing, func);
+            thing.click(function () {
+                hub.addAtRoot(func());
             });
         }
 
-        function permalink() {
-            var config = layout.toConfig();
-            return window.location.href.split('#')[0] + '#' + url.serialiseState(config);
-        }
-
-        initPopover($("#get-full-link"), function (done) {
-            done(permalink);
+        setupAdd($('#add-diff'), function () {
+            return Components.getDiff();
         });
-        initPopover($("#get-short-link"), function (done) {
-            shortenURL(permalink(), done);
+        setupAdd($('#add-editor'), function () {
+            return Components.getEditor();
+        });
+        $('#ui-reset').click(function () {
+            local.remove('gl');
+            window.location.reload();
+        });
+        $('#thanks-to').click(function () {
+            $.get('thanks.html', function (result) {
+                new Alert().alert("Special thanks to", $(result));
+            });
         });
     }
 

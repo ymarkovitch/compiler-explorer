@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2016, Matt Godbolt
+// Copyright (c) 2012-2017, Matt Godbolt
 //
 // All rights reserved.
 //
@@ -26,6 +26,7 @@
 define(function (require) {
     "use strict";
     var options = require('options');
+    var Alert = require('alert');
 
     function googleJSClientLoaded() {
         gapi.client.setApiKey(options.gapiKey);
@@ -51,6 +52,10 @@ define(function (require) {
             }
             done(id);
         }, function () {
+            new Alert().notify("The URL could not be shortened. It probaly exceeds the Google URL Shortener length limits.", {
+                group: "urltoolong",
+                alertClass: "notification-error"
+            });
             done(url);
         });
     }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2016, Matt Godbolt
+// Copyright (c) 2012-2017, Matt Godbolt
 //
 // All rights reserved.
 //
@@ -27,9 +27,9 @@ define(function (require) {
     "use strict";
 
     var _ = require('underscore');
+    var FontScale = require('fontscale');
 
     function Output(hub, container, state) {
-        var self = this;
         this.container = container;
         this.compilerId = state.compiler;
         this.editorId = state.editor;
@@ -38,9 +38,12 @@ define(function (require) {
         this.domRoot.html($('#compiler-output').html());
         this.contentRoot = this.domRoot.find(".content");
         this.compiler = null;
+        this.fontScale = new FontScale(this.domRoot, state, "pre");
 
         this.eventHub.on('compileResult', this.onCompileResult, this);
         this.eventHub.emit('resendCompilation', this.compilerId);
+        this.eventHub.on('compilerFontScale', this.onFontScale, this);
+        this.eventHub.on('compilerClose', this.onCompilerClose, this);
 
         this.updateCompilerName();
     }
@@ -51,13 +54,26 @@ define(function (require) {
 
         this.contentRoot.empty();
 
-        _.each(result.stdout.concat(result.stderr), function (obj) {
+        _.each((result.stdout || []).concat(result.stderr || []), function (obj) {
             this.add(obj.text, obj.line);
         }, this);
 
         this.add("Compiler exited with result code " + result.code);
 
+        if (result.execResult) {
+            var elem = $('<div><hr></div>').appendTo(this.contentRoot);
+            this.add("Output from execution:");
+            _.each((result.execResult.stdout || []).concat(result.execResult.stderr || []), function (obj) {
+                this.add(obj.text, obj.line);
+            }, this);
+            this.add("User code exited with result code " + result.execResult.code);
+        }
+
         this.updateCompilerName();
+    };
+
+    Output.prototype.onFontScale = function (id, scale) {
+        if (id === this.compilerId) this.fontScale.setScale(scale);
     };
 
     Output.prototype.add = function (msg, lineNum) {
@@ -81,14 +97,17 @@ define(function (require) {
         this.container.setTitle(name);
     };
 
-    return {
-        Output: Output,
-        getComponent: function (compiler, editor) {
-            return {
-                type: 'component',
-                componentName: 'output',
-                componentState: {compiler: compiler, editor: editor},
-            };
+    Output.prototype.onCompilerClose = function (id) {
+        if (id === this.compilerId) {
+            // We can't immediately close as an outer loop somewhere in GoldenLayout is iterating over
+            // the hierarchy. We can't modify while it's being iterated over.
+            _.defer(function (self) {
+                self.container.close();
+            }, this);
         }
+    };
+
+    return {
+        Output: Output
     };
 });

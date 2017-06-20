@@ -1,46 +1,59 @@
-// Copyright (c) 2012-2016, Matt Godbolt
+// Copyright (c) 2012-2017, Matt Godbolt
 //
 // All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without 
+//
+// Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice, 
+//
+//     * Redistributions of source code must retain the above copyright notice,
 //       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright 
-//       notice, this list of conditions and the following disclaimer in the 
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
 //       documentation and/or other materials provided with the distribution.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE 
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
 define(function (require) {
     "use strict";
-    var CodeMirror = require('codemirror');
     var $ = require('jquery');
     var _ = require('underscore');
     var ga = require('analytics').ga;
     var colour = require('colour');
     var Toggles = require('toggles');
     var FontScale = require('fontscale');
-    var output = require('output');
     var Promise = require('es6-promise').Promise;
-
+    var Components = require('components');
+    var LruCache = require('lru-cache');
+    var monaco = require('monaco');
+    var Alert = require('alert');
+    var bigInt = require('big-integer');
     require('asm-mode');
+
     require('selectize');
 
     var options = require('options');
     var compilers = options.compilers;
-    var compilersById = _.object(_.pluck(compilers, "id"), compilers);
+    var compilersById = {};
+    _.forEach(compilers, function (compiler) {
+        compilersById[compiler.id] = compiler;
+        if (compiler.alias) compilersById[compiler.alias] = compiler;
+    });
+    var Cache = new LruCache({
+        max: 200 * 1024,
+        length: function (n) {
+            return JSON.stringify(n).length;
+        }
+    });
 
     function Compiler(hub, container, state) {
         var self = this;
@@ -49,17 +62,26 @@ define(function (require) {
         this.domRoot = container.getElement();
         this.domRoot.html($('#compiler').html());
 
-        this.id = state.id || hub.nextId();
+        this.id = state.id || hub.nextCompilerId();
         this.sourceEditorId = state.source || 1;
         this.compiler = compilersById[state.compiler] || compilersById[options.defaultCompiler];
         this.options = state.options || options.compileOptions;
         this.filters = new Toggles(this.domRoot.find(".filters"), state.filters);
+        this.unexpandedSource = "";
         this.source = "";
         this.assembly = [];
+        this.colours = [];
         this.lastResult = null;
-        this.lastRequestRespondedTo = "";
+        this.pendingRequestSentAt = 0;
+        this.nextRequest = null;
+        this.settings = {};
 
-        this.debouncedAjax = _.debounce($.ajax, 250);
+        this.decorations = {};
+        this.prevDecorations = [];
+        this.optButton = this.domRoot.find('.btn.view-optimization');
+        this.astButton = this.domRoot.find('.btn.view-ast');
+
+        this.linkedFadeTimeoutId = -1;
 
         this.domRoot.find(".compiler-picker").selectize({
             sortField: 'name',
@@ -69,11 +91,16 @@ define(function (require) {
             options: compilers,
             items: this.compiler ? [this.compiler.id] : []
         }).on('change', function () {
+            ga('send', {
+                hitType: 'event',
+                eventCategory: 'SelectCompiler',
+                eventAction: $(this).val()
+            });
             self.onCompilerChange($(this).val());
         });
-        var optionsChange = function () {
+        var optionsChange = _.debounce(function () {
             self.onOptionsChange($(this).val());
-        };
+        }, 800);
         this.domRoot.find(".options")
             .val(this.options)
             .on("change", optionsChange)
@@ -81,39 +108,113 @@ define(function (require) {
 
         // Hide the binary option if the global options has it disabled.
         this.domRoot.find("[data-bind='binary']").toggle(options.supportsBinary);
+        this.domRoot.find("[data-bind='execute']").toggle(options.supportsExecute);
 
-        this.outputEditor = CodeMirror.fromTextArea(this.domRoot.find("textarea")[0], {
-            lineNumbers: true,
-            mode: "text/x-asm",
+        this.outputEditor = monaco.editor.create(this.domRoot.find(".monaco-placeholder")[0], {
+            scrollBeyondLastLine: false,
             readOnly: true,
-            gutters: ['CodeMirror-linenumbers'],
-            lineWrapping: true
+            language: 'asm',
+            fontFamily: 'Fira Mono',
+            glyphMargin: true,
+            fixedOverflowWidgets: true
         });
 
-        this.fontScale = new FontScale(this.domRoot, state);
-        this.fontScale.on('change', _.bind(this.saveState, this));
+        this.outputEditor.addAction({
+            id: 'viewsource',
+            label: 'Scroll to source',
+            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.F10],
+            keybindingContext: null,
+            contextMenuGroupId: 'navigation',
+            contextMenuOrder: 1.5,
+            run: function (ed) {
+                var desiredLine = ed.getPosition().lineNumber - 1;
+                self.eventHub.emit('editorSetDecoration', self.sourceEditorId, self.assembly[desiredLine].source, true);
+            }
+        });
+
+        this.outputEditor.addAction({
+            id: 'viewasmdoc',
+            label: 'View asm doc',
+            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.F8],
+            keybindingContext: null,
+            contextMenuGroupId: 'help',
+            contextMenuOrder: 1.5,
+            run: _.bind(this.onAsmToolTip, this)
+        });
+
+        this.outputEditor.addAction({
+            id: 'toggleColourisation',
+            label: 'Toggle colourisation',
+            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.F1],
+            keybindingContext: null,
+            run: _.bind(function () {
+                this.eventHub.emit('modifySettings', {
+                    colouriseAsm: !this.settings.colouriseAsm
+                });
+            }, this)
+        });
+
+        function clearEditorsLinkedLines() {
+            self.eventHub.emit('editorSetDecoration', self.sourceEditorId, -1, false);
+        }
+
+        this.outputEditor.onMouseMove(function (e) {
+            self.mouseMoveThrottledFunction(e);
+            if (self.linkedFadeTimeoutId !== -1) {
+                clearTimeout(self.linkedFadeTimeoutId);
+                self.linkedFadeTimeoutId = -1;
+            }
+        });
+
+        this.mouseMoveThrottledFunction = _.throttle(_.bind(this.onMouseMove, this), 250);
+
+        this.outputEditor.onMouseLeave(function (e) {
+            self.linkedFadeTimeoutId = setTimeout(function () {
+                clearEditorsLinkedLines();
+                self.linkedFadeTimeoutId = -1;
+            }, 5000);
+        });
+
+        this.fontScale = new FontScale(this.domRoot, state, this.outputEditor);
+        this.fontScale.on('change', _.bind(function () {
+            this.saveState();
+            this.updateFontScale();
+        }, this));
 
         this.filters.on('change', _.bind(this.onFilterChange, this));
 
         container.on('destroy', function () {
             self.eventHub.unsubscribe();
             self.eventHub.emit('compilerClose', self.id);
+            self.outputEditor.dispose();
         }, this);
         container.on('resize', this.resize, this);
-        container.on('shown', this.refresh, this);
+        container.on('shown', this.resize, this);
         container.on('open', function () {
-            self.eventHub.emit('compilerOpen', self.id);
+            self.eventHub.emit('compilerOpen', self.id, self.sourceEditorId);
+            self.updateFontScale();
         });
         this.eventHub.on('editorChange', this.onEditorChange, this);
         this.eventHub.on('editorClose', this.onEditorClose, this);
         this.eventHub.on('colours', this.onColours, this);
         this.eventHub.on('resendCompilation', this.onResendCompilation, this);
+        this.eventHub.on('findCompilers', this.sendCompiler, this);
+        this.eventHub.on('compilerSetDecorations', this.onCompilerSetDecorations, this);
+        this.eventHub.on('settingsChange', this.onSettingsChange, this);
+        this.eventHub.on('themeChange', this.onThemeChange, this);
+        this.eventHub.on('optViewClosed', this.onOptViewClosed, this);
+        this.eventHub.on('astViewOpened', this.onAstViewOpened, this);
+        this.eventHub.on('astViewClosed', this.onAstViewClosed, this);
+        this.eventHub.emit('requestSettings');
+        this.eventHub.emit('requestTheme');
+        this.sendCompiler();
         this.updateCompilerName();
         this.updateButtons();
 
         var outputConfig = _.bind(function () {
-            return output.getComponent(this.id, this.sourceEditorId);
+            return Components.getOutput(this.id, this.sourceEditorId);
         }, this);
+
         this.container.layoutManager.createDragSource(this.domRoot.find(".status").parent(), outputConfig);
         this.domRoot.find(".status").parent().click(_.bind(function () {
             var insertPoint = hub.findParentRowOrColumn(this.container) ||
@@ -129,18 +230,45 @@ define(function (require) {
             };
         }
 
+        function createOptView() {
+            return Components.getOptViewWith(self.id, self.unexpandedSource, self.lastResult.optOutput, self.getCompilerName(), self.sourceEditorId);
+        }
+
+        function createAstView() {
+            return Components.getAstViewWith(self.id, self.unexpandedSource, self.lastResult.astOutput, self.getCompilerName(), self.sourceEditorId);
+        }
+
         this.container.layoutManager.createDragSource(
             this.domRoot.find('.btn.add-compiler'), cloneComponent);
+
         this.domRoot.find('.btn.add-compiler').click(_.bind(function () {
             var insertPoint = hub.findParentRowOrColumn(this.container) ||
                 this.container.layoutManager.root.contentItems[0];
             insertPoint.addChild(cloneComponent());
         }, this));
-    }
 
-    Compiler.prototype.refresh = function () {
-        this.outputEditor.refresh();
-    };
+        this.container.layoutManager.createDragSource(
+            this.optButton, createOptView.bind(this));
+
+        this.optButton.click(_.bind(function () {
+            var insertPoint = hub.findParentRowOrColumn(this.container) ||
+                this.container.layoutManager.root.contentItems[0];
+            insertPoint.addChild(createOptView());
+            this.optButton.prop("disabled", true);
+        }, this));
+
+        this.container.layoutManager.createDragSource(
+            this.astButton, createAstView.bind(this));
+
+        this.astButton.click(_.bind(function () {
+            var insertPoint = hub.findParentRowOrColumn(this.container) ||
+                this.container.layoutManager.root.contentItems[0];
+            insertPoint.addChild(createAstView());
+            this.compile();
+        }, this));
+
+        this.saveState();
+    }
 
     // TODO: need to call resize if either .top-bar or .bottom-bar resizes, which needs some work.
     // Issue manifests if you make a window where one compiler is small enough that the buttons spill onto two lines:
@@ -148,8 +276,10 @@ define(function (require) {
     Compiler.prototype.resize = function () {
         var topBarHeight = this.domRoot.find(".top-bar").outerHeight(true);
         var bottomBarHeight = this.domRoot.find(".bottom-bar").outerHeight(true);
-        this.outputEditor.setSize(this.domRoot.width(), this.domRoot.height() - topBarHeight - bottomBarHeight);
-        this.refresh();
+        this.outputEditor.layout({
+            width: this.domRoot.width(),
+            height: this.domRoot.height() - topBarHeight - bottomBarHeight
+        });
     };
 
     // Gets the filters that will actually be used (accounting for issues with binary
@@ -160,98 +290,122 @@ define(function (require) {
         if (filters.binary && !this.compiler.supportsBinary) {
             delete filters.binary;
         }
+        if (filters.exeute && !this.compiler.supportsExecute) {
+            delete filters.execute;
+        }
         return filters;
     };
 
+
     Compiler.prototype.compile = function () {
-        var self = this;
+        var shouldProduceAst = this.astViewOpen;
         var request = {
             source: this.source || "",
             compiler: this.compiler ? this.compiler.id : "",
             options: this.options,
+            backendOptions: {produceAst: shouldProduceAst},
             filters: this.getEffectiveFilters()
         };
 
         if (!this.compiler) {
-            this.onCompileResponse(request, errorResult("Please select a compiler"));
+            this.onCompileResponse(request, errorResult("<Please select a compiler>"), false);
             return;
         }
 
-        var cacheableRequest = JSON.stringify(request);
-        if (cacheableRequest === this.lastRequestRespondedTo) return;
-        // only set the request timestamp after checking cache; else we'll always fetch
-        request.timestamp = Date.now();
+        this.sendCompile(request);
+    };
 
-        this.debouncedAjax({
+    Compiler.prototype.sendCompile = function (request) {
+        if (this.pendingRequestSentAt) {
+            // If we have a request pending, then just store this request to do once the
+            // previous request completes.
+            this.nextRequest = request;
+            return;
+        }
+        this.eventHub.emit('compiling', this.id, this.compiler);
+        var jsonRequest = JSON.stringify(request);
+        var cachedResult = Cache.get(jsonRequest);
+        if (cachedResult) {
+            this.onCompileResponse(request, cachedResult, true);
+            return;
+        }
+
+        this.pendingRequestSentAt = Date.now();
+        // After a short delay, give the user some indication that we're working on their
+        // compilation.
+        var progress = setTimeout(_.bind(function () {
+            this.setAssembly(fakeAsm("<Compiling...>"));
+        }, this), 500);
+        $.ajax({
             type: 'POST',
-            url: '/compile',
+            url: 'api/compiler/' + encodeURIComponent(request.compiler) + '/compile',
             dataType: 'json',
             contentType: 'application/json',
-            data: JSON.stringify(request),
+            data: jsonRequest,
             success: _.bind(function (result) {
+                clearTimeout(progress);
                 if (result.okToCache) {
-                    this.lastRequestRespondedTo = cacheableRequest;
-                } else {
-                    this.lastRequestRespondedTo = "";
+                    Cache.set(jsonRequest, result);
                 }
-                self.onCompileResponse(request, result);
+                this.onCompileResponse(request, result, false);
             }, this),
             error: _.bind(function (xhr, e_status, error) {
-                this.lastRequestRespondedTo = "";
-                self.onCompileResponse(request, errorResult("Remote compilation failed: " + error));
+                clearTimeout(progress);
+                this.onCompileResponse(request, errorResult("<Remote compilation failed: " + error + ">"), false);
             }, this),
             cache: false
         });
     };
 
+    Compiler.prototype.getBinaryForLine = function (line) {
+        var obj = this.assembly[line - 1];
+        if (!obj) return '<div class="address">????</div><div class="opcodes"><span class="opcode">????</span></div>';
+        var address = obj.address ? obj.address.toString(16) : "";
+        var opcodes = '<div class="opcodes" title="' + (obj.opcodes || []).join(" ") + '">';
+        _.each(obj.opcodes, function (op) {
+            opcodes += ('<span class="opcode">' + op + '</span>');
+        });
+        return '<div class="address">' + address + '</div>' + opcodes + '</div>';
+    };
+
+    // TODO: use ContentWidgets? OverlayWidgets?
+    // Use highlight providers? hover providers? highlight providers?
     Compiler.prototype.setAssembly = function (assembly) {
         this.assembly = assembly;
-        this.outputEditor.setValue(_.pluck(assembly, 'text').join("\n"));
-
+        this.outputEditor.getModel().setValue(_.pluck(assembly, 'text').join("\n"));
         var addrToAddrDiv = {};
+        var decorations = [];
         _.each(this.assembly, _.bind(function (obj, line) {
             var address = obj.address ? obj.address.toString(16) : "";
-            var div = $("<div class='address cm-number'>" + address + "</div>");
-            addrToAddrDiv[address] = {div: div, line: line};
-            this.outputEditor.setGutterMarker(line, 'address', div[0]);
+            //     var div = $("<div class='address cm-number'>" + address + "</div>");
+            addrToAddrDiv[address] = {div: "moo", line: line};
         }, this));
 
         _.each(this.assembly, _.bind(function (obj, line) {
-            var opcodes = $("<div class='opcodes'></div>");
-            if (obj.opcodes) {
-                var title = [];
-                _.each(obj.opcodes, function (op) {
-                    var opcodeNum = "00" + op.toString(16);
-                    opcodeNum = opcodeNum.substr(opcodeNum.length - 2);
-                    title.push(opcodeNum);
-                    var opcode = $("<span class='opcode'>" + opcodeNum + "</span>");
-                    opcodes.append(opcode);
-                });
-                opcodes.attr('title', title.join(" "));
-            }
-            this.outputEditor.setGutterMarker(line, 'opcodes', opcodes[0]);
             if (obj.links) {
                 _.each(obj.links, _.bind(function (link) {
-                    var from = {line: line, ch: link.offset};
-                    var to = {line: line, ch: link.offset + link.length};
                     var address = link.to.toString(16);
-                    var thing = $("<a href='#' class='cm-number'>" + address + "</a>");
-                    this.outputEditor.markText(
-                        from, to, {replacedWith: thing[0], handleMouseEvents: false});
+                    // var thing = $("<a href='#' class='cm-number'>" + address + "</a>");
+                    // this.outputEditor.markText(
+                    //     from, to, {replacedWith: thing[0], handleMouseEvents: false});
                     var dest = addrToAddrDiv[address];
                     if (dest) {
-                        var editor = this.outputEditor;
-                        thing.hover(function (e) {
-                            var entered = e.type == "mouseenter";
-                            dest.div.toggleClass("highlighted", entered);
-                            thing.toggleClass("highlighted", entered);
+                        decorations.push({
+                            range: new monaco.Range(line, link.offset, line, link.offset + link.length),
+                            options: {}
                         });
-                        thing.on('click', function (e) {
-                            editor.scrollIntoView({line: dest.line, ch: 0}, 30);
-                            dest.div.toggleClass("highlighted", false);
-                            thing.toggleClass("highlighted", false);
-                            e.preventDefault();
-                        });
+                        // var editor = this.outputEditor;
+                        // thing.hover(function (e) {
+                        //     var entered = e.type == "mouseenter";
+                        //     dest.div.toggleClass("highlighted", entered);
+                        //     thing.toggleClass("highlighted", entered);
+                        // });
+                        // thing.on('click', function (e) {
+                        //     editor.scrollIntoView({line: dest.line, ch: 0}, 30);
+                        //     dest.div.toggleClass("highlighted", false);
+                        //     thing.toggleClass("highlighted", false);
+                        //     e.preventDefault();
+                        // });
                     }
                 }, this));
             }
@@ -266,38 +420,70 @@ define(function (require) {
         return [{text: text, source: null, fake: true}];
     }
 
-    Compiler.prototype.onCompileResponse = function (request, result) {
+    Compiler.prototype.onCompileResponse = function (request, result, cached) {
+        // Delete trailing empty lines
+        if ($.isArray(result.asm)) {
+            var cutCount = 0;
+            for (var i = result.asm.length - 1; i >= 0; i--) {
+                if (result.asm[i].text) {
+                    break;
+                }
+                cutCount++;
+            }
+            result.asm.splice(result.asm.length - cutCount, cutCount);
+        }
         this.lastResult = result;
+        var timeTaken = Math.max(0, Date.now() - this.pendingRequestSentAt);
+        var wasRealReply = this.pendingRequestSentAt > 0;
+        this.pendingRequestSentAt = 0;
         ga('send', {
             hitType: 'event',
             eventCategory: 'Compile',
             eventAction: request.compiler,
-            eventLabel: request.options
+            eventLabel: request.options,
+            eventValue: cached ? 1 : 0
         });
         ga('send', {
             hitType: 'timing',
             timingCategory: 'Compile',
             timingVar: request.compiler,
-            timingValue: Date.now() - request.timestamp
+            timingValue: timeTaken
         });
-        this.outputEditor.operation(_.bind(function () {
-            this.setAssembly(result.asm || fakeAsm("[no output]"));
-            if (request.filters.binary) {
-                this.outputEditor.setOption('lineNumbers', false);
-                this.outputEditor.setOption('gutters', ['address', 'opcodes']);
-            } else {
-                this.outputEditor.setOption('lineNumbers', true);
-                this.outputEditor.setOption('gutters', ['CodeMirror-linenumbers']);
-            }
-        }, this));
+        this.setAssembly(result.asm || fakeAsm("<No output>"));
+        if (request.filters.binary) {
+            this.outputEditor.updateOptions({
+                lineNumbers: _.bind(this.getBinaryForLine, this),
+                lineNumbersMinChars: 19
+            });
+        } else {
+            this.outputEditor.updateOptions({
+                lineNumbers: true,
+                lineNumbersMinChars: 5
+            });
+        }
         var status = this.domRoot.find(".status");
-        var allText = _.pluck(result.stdout.concat(result.stderr), 'text').join("\n");
+        var allText = _.pluck((result.stdout || []).concat(result.stderr | []), 'text').join("\n");
         var failed = result.code !== 0;
         var warns = !failed && !!allText;
         status.toggleClass('error', failed);
         status.toggleClass('warning', warns);
         status.parent().attr('title', allText);
+        this.optButton.prop("disabled", !result.hasOptOutput);
+        var compileTime = this.domRoot.find('.compile-time');
+        if (cached) {
+            compileTime.text("- cached");
+        } else if (wasRealReply) {
+            compileTime.text("- " + timeTaken + "ms");
+        } else {
+            compileTime.text("");
+        }
         this.eventHub.emit('compileResult', this.id, this.compiler, result);
+
+        if (this.nextRequest) {
+            var next = this.nextRequest;
+            this.nextRequest = null;
+            this.sendCompile(next);
+        }
     };
 
     Compiler.prototype.expand = function (source) {
@@ -328,10 +514,31 @@ define(function (require) {
 
     Compiler.prototype.onEditorChange = function (editor, source) {
         if (editor === this.sourceEditorId) {
+            this.unexpandedSource = source;
             this.expand(source).then(_.bind(function (expanded) {
                 this.source = expanded;
                 this.compile();
             }, this));
+        }
+    };
+
+    Compiler.prototype.onOptViewClosed = function (id) {
+        if (this.id == id) {
+            this.optButton.prop('disabled', false);
+        }
+    };
+
+    Compiler.prototype.onAstViewOpened = function (id) {
+        if (this.id == id) {
+            this.astButton.prop("disabled", true);
+            this.astViewOpen = true;
+        }
+    };
+
+    Compiler.prototype.onAstViewClosed = function (id) {
+        if (this.id == id) {
+            this.astButton.prop('disabled', false);
+            this.astViewOpen = false;
         }
     };
 
@@ -340,13 +547,16 @@ define(function (require) {
         var filters = this.getEffectiveFilters();
         // We can support intel output if the compiler supports it, or if we're compiling
         // to binary (as we can disassemble it however we like).
-        var intelAsm = this.compiler.intelAsm || filters.binary;
+        var intelAsm = this.compiler.supportsIntel || filters.binary;
         this.domRoot.find("[data-bind='intel']").toggleClass("disabled", !intelAsm);
         // Disable binary support on compilers that don't work with it.
         this.domRoot.find("[data-bind='binary']")
             .toggleClass("disabled", !this.compiler.supportsBinary);
+        this.domRoot.find("[data-bind='execute']")
+            .toggleClass("disabled", !this.compiler.supportsExecute);
         // Disable any of the options which don't make sense in binary mode.
-        this.domRoot.find('.nonbinary').toggleClass("disabled", !!filters.binary && !this.compiler.isCl);
+        var filtersDisabled = !!filters.binary && !this.compiler.supportsFiltersInBinary;
+        this.domRoot.find('.nonbinary').toggleClass("disabled", filtersDisabled);
     };
 
     Compiler.prototype.onOptionsChange = function (options) {
@@ -354,6 +564,7 @@ define(function (require) {
         this.saveState();
         this.compile();
         this.updateButtons();
+        this.sendCompiler();
     };
 
     Compiler.prototype.onCompilerChange = function (value) {
@@ -362,11 +573,20 @@ define(function (require) {
         this.compile();
         this.updateButtons();
         this.updateCompilerName();
+        this.sendCompiler();
+    };
+
+    Compiler.prototype.sendCompiler = function () {
+        this.eventHub.emit('compiler', this.id, this.compiler, this.options, this.sourceEditorId);
     };
 
     Compiler.prototype.onEditorClose = function (editor) {
         if (editor === this.sourceEditorId) {
-            this.container.close();
+            // We can't immediately close as an outer loop somewhere in GoldenLayout is iterating over
+            // the hierarchy. We can't modify while it's being iterated over.
+            _.defer(function (self) {
+                self.container.close();
+            }, this);
         }
     };
 
@@ -379,8 +599,8 @@ define(function (require) {
     Compiler.prototype.currentState = function () {
         var state = {
             compiler: this.compiler ? this.compiler.id : "",
+            source: this.sourceEditorId,
             options: this.options,
-            source: this.editor,
             filters: this.filters.get()  // NB must *not* be effective filters
         };
         this.fontScale.addState(state);
@@ -391,20 +611,28 @@ define(function (require) {
         this.container.setState(this.currentState());
     };
 
-    Compiler.prototype.onColours = function (editor, colours) {
+    Compiler.prototype.updateFontScale = function () {
+        this.eventHub.emit('compilerFontScale', this.id, this.fontScale.scale);
+    };
+
+    Compiler.prototype.onColours = function (editor, colours, scheme) {
         if (editor == this.sourceEditorId) {
             var asmColours = {};
             _.each(this.assembly, function (x, index) {
                 if (x.source) asmColours[index] = colours[x.source - 1];
             });
-            colour.applyColours(this.outputEditor, asmColours);
+            this.colours = colour.applyColours(this.outputEditor, asmColours, scheme, this.colours);
         }
     };
 
+    Compiler.prototype.getCompilerName = function () {
+        return this.compiler ? this.compiler.name : "no compiler set";
+    };
+
     Compiler.prototype.updateCompilerName = function () {
-        var compilerName = this.compiler ? this.compiler.name : "no compiler set";
+        var compilerName = this.getCompilerName();
         var compilerVersion = this.compiler ? this.compiler.version : "";
-        this.container.setTitle("#" + this.sourceEditorId + " with " + compilerName);
+        this.container.setTitle(compilerName + " (Editor #" + this.sourceEditorId + ", Compiler #" + this.id + ")");
         this.domRoot.find(".full-compiler-name").text(compilerVersion);
     };
 
@@ -414,26 +642,175 @@ define(function (require) {
         }
     };
 
-    return {
-        Compiler: Compiler,
-        getComponent: function (editorId) {
-            return {
-                type: 'component',
-                componentName: 'compiler',
-                componentState: {source: editorId}
-            };
-        },
-        getComponentWith: function (editorId, filters, options, compilerId) {
-            return {
-                type: 'component',
-                componentName: 'compiler',
-                componentState: {
-                    source: editorId,
-                    filters: filters,
-                    options: options,
-                    compiler: compilerId
-                }
-            };
+    Compiler.prototype.updateDecorations = function () {
+        this.prevDecorations = this.outputEditor.deltaDecorations(
+            this.prevDecorations, _.flatten(_.values(this.decorations), true));
+    };
+
+    Compiler.prototype.onCompilerSetDecorations = function (id, lineNums, revealLine) {
+        if (id == this.id) {
+            if (revealLine && lineNums[0])
+                this.outputEditor.revealLineInCenter(lineNums[0]);
+            this.decorations.linkedCode = _.map(lineNums, function (line) {
+                return {
+                    range: new monaco.Range(line, 1, line, 1),
+                    options: {
+                        isWholeLine: true,
+                        linesDecorationsClassName: 'linked-code-decoration-margin',
+                        inlineClassName: 'linked-code-decoration-inline'
+                    }
+                };
+            });
+            this.updateDecorations();
         }
+    };
+
+    Compiler.prototype.onSettingsChange = function (newSettings) {
+        var before = this.settings;
+        this.settings = _.clone(newSettings);
+        if (!before.lastHoverShowSource && this.settings.hoverShowSource) {
+            this.onCompilerSetDecorations(this.id, []);
+        }
+        this.outputEditor.updateOptions({
+            contextmenu: this.settings.useCustomContextMenu
+        });
+    };
+
+    var hexLike = /^(#?[$]|0x)([0-9a-fA-F]+)$/;
+    var hexLike2 = /^(#?)([0-9a-fA-F]+)H$/;
+    var decimalLike = /^(#?)(-?[0-9]+)$/;
+
+    function getNumericToolTip(value) {
+        var match = hexLike.exec(value) || hexLike2.exec(value);
+        if (match) {
+            return value + ' = ' + bigInt(match[2], 16).toString(10);
+        }
+        match = decimalLike.exec(value);
+        if (match) {
+            var asBig = bigInt(match[2]);
+            if (asBig.isNegative()) {
+                asBig = bigInt("ffffffffffffffff", 16).and(asBig);
+            }
+            return value + ' = 0x' + asBig.toString(16).toUpperCase();
+        }
+
+        return null;
+    }
+
+    var opcodeLike = /^[a-zA-Z][a-zA-Z0-9_.]+$/; // at least two characters
+    var getAsmInfo = function (opcode) {
+        if (!opcodeLike.exec(opcode)) {
+            return Promise.resolve(null);
+        }
+        var cacheName = "asm/" + opcode;
+        var cached = Cache.get(cacheName);
+        if (cached) {
+            return Promise.resolve(cached.found ? cached.result : null);
+        }
+        var promise = new Promise(function (resolve, reject) {
+            $.ajax({
+                type: 'GET',
+                url: 'api/asm/' + opcode,
+                dataType: 'json',  // Expected,
+                contentType: 'text/plain',  // Sent
+                success: function (result) {
+                    Cache.set(cacheName, result);
+                    resolve(result.found ? result.result : null);
+                },
+                error: function (result) {
+                    reject(result);
+                },
+                cache: true
+            });
+        });
+        return promise;
+    };
+
+    Compiler.prototype.onMouseMove = function (e) {
+        if (e === null || e.target === null || e.target.position === null) return;
+        if (this.settings.hoverShowSource === true && this.assembly) {
+            var desiredLine = e.target.position.lineNumber - 1;
+            if (this.assembly[desiredLine]) {
+                // We check that we actually have something to show at this point!
+                this.eventHub.emit('editorSetDecoration', this.sourceEditorId, this.assembly[desiredLine].source, false);
+            }
+        }
+        var currentWord = this.outputEditor.getModel().getWordAtPosition(e.target.position);
+        if (currentWord && currentWord.word) {
+            var word = currentWord.word;
+            currentWord.range = new monaco.Range(e.target.position.lineNumber, currentWord.startColumn, e.target.position.lineNumber, currentWord.endColumn);
+            // Hacky workaround to check for negative numbers. c.f. https://github.com/mattgodbolt/compiler-explorer/issues/434
+            var lineContent = this.outputEditor.getModel().getLineContent(e.target.position.lineNumber);
+            if (lineContent[currentWord.startColumn - 2] === '-') {
+                word = '-' + word;
+                currentWord.range.startColumn -= 1;
+            }
+            var numericToolTip = getNumericToolTip(word);
+            if (numericToolTip) {
+                this.decorations.numericToolTip = {
+                    range: currentWord.range,
+                    options: {isWholeLine: false, hoverMessage: ['`' + numericToolTip + '`']}
+                };
+                this.updateDecorations();
+            }
+
+            if (this.settings.hoverShowAsmDoc === true) {
+                getAsmInfo(currentWord.word).then(_.bind(function (response) {
+                    if (response) {
+                        this.decorations.asmToolTip = {
+                            range: currentWord.range,
+                            options: {
+                                isWholeLine: false,
+                                hoverMessage: [response.tooltip + "\n\nMore information available in the context menu."]
+                            }
+                        };
+                        this.updateDecorations();
+                    }
+                }, this));
+            }
+        }
+    };
+
+    Compiler.prototype.onAsmToolTip = function (ed) {
+        var pos = ed.getPosition();
+        var word = ed.getModel().getWordAtPosition(pos);
+        if (!word || !word.word) return;
+        var opcode = word.word.toUpperCase();
+        getAsmInfo(word.word).then(
+            _.bind(function (asmHelp) {
+                if (asmHelp) {
+                    new Alert().alert(opcode + " help", asmHelp.html +
+                        '<br><br>For more information, visit <a href="' + asmHelp.url + '" target="_blank" rel="noopener noreferrer">the ' +
+                        opcode + ' documentation <span class="glyphicon glyphicon-new-window" width="16px" height="16px" title="Opens in a new window"/></span></a>.',
+                        function () {
+                            ed.focus();
+                            ed.setPosition(pos);
+                        }
+                    );
+                } else {
+                    new Alert().notify('This token was not found in the documentation.<br>Only <i>most</i> <b>Intel x86</b> opcodes supported for now.', {
+                        group: "notokenindocs",
+                        alertClass: "notification-error",
+                        dismissTime: 3000
+                    });
+                }
+            }), function (rejection) {
+                new Alert().notify('There was an error fetching the documentation for this opcode (' + rejection + ').', {
+                    group: "notokenindocs",
+                    alertClass: "notification-error",
+                    dismissTime: 3000
+                });
+            }
+        );
+    };
+
+    Compiler.prototype.onThemeChange = function (newTheme) {
+        if (this.outputEditor)
+            this.outputEditor.updateOptions({theme: newTheme.monaco});
+        this.resize(); // in case anything changes size in the header or footer
+    };
+
+    return {
+        Compiler: Compiler
     };
 });

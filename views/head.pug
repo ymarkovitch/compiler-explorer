@@ -1,0 +1,25 @@
+title Compiler Explorer - #{language}
+meta(charset="utf-8")
+meta(http-equiv="X-UA-Compatible" content="IE=edge")
+case language
+  when "Rust"
+    meta(name="description" content="Compiler Explorer for Rust is an interactive online compiler which shows the assembly output of compiled Rust code.")
+  when "Go"
+    meta(name="description" content="Compiler Explorer for Go is an interactive online compiler which shows the assembly output of compiled Go code.")
+  when "D"
+    meta(name="description" content="Compiler Explorer for D is an interactive online compiler which shows the assembly output of compiled D code.")
+  when "Haskell"
+    meta(name="description" content="Compiler Explorer for Haskell is an interactive online compiler which shows the assembly output of compiled Haskell code.")
+  when "ispc"
+    meta(name="description" content="Compiler Explorer for the C variant ispc is an interactive online compiler which shows the assembly output of compiled ispc code.")
+  when "C++"
+  default
+    meta(name="description" content="Compiler Explorer is an interactive online compiler which shows the assembly output of compiled C/C++/Rust/Go/D/Haskell code.")
+meta(name="author" content="Matt Godbolt")
+meta(name="google" content="nositelinkssearchbox")
+meta(name="google" content="notranslate")
+link(href=root + "explorer.css" rel="stylesheet")
+style#theme
+link(href="https://fonts.googleapis.com/css?family=Fira+Mono" rel="stylesheet")
+script window.compilerExplorerOptions = !{compilerExplorerOptions}
+script(data-main=root + "main" src=root + "ext/requirejs/require.js")

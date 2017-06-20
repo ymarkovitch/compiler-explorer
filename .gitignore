@@ -2,7 +2,9 @@
 /node_modules
 /.npm-updated
 /.bower-updated
+*.vscode
 /out
 *.heapsnapshot
 log/
 *~
+etc/config/*.local.properties

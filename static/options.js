@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2016, Matt Godbolt
+// Copyright (c) 2012-2017, Matt Godbolt
 //
 // All rights reserved.
 // 
@@ -25,7 +25,6 @@
 
 define(function (require) {
     "use strict";
-    var $ = require('jquery');
-    var options = $.ajax({type: "GET", url: 'client-options.json', async: false});
-    return options.responseJSON;
+    return window.compilerExplorerOptions;
 });
+

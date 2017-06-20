@@ -1,5 +1,5 @@
 {
-  "name": "gcc-explorer",
+  "name": "compiler-explorer",
   "description": "Interactively investigate compiler output",
   "author": {
     "name": "Matt Godbolt",
@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "mattgodbolt/gcc-explorer"
+    "url": "mattgodbolt/compiler-explorer"
   },
   "version": "0.0.3",
   "engines": {
@@ -18,28 +18,36 @@
   "dependencies": {
     "aws-sdk": "*",
     "body-parser": "1.14.x",
+    "compiler-opt-info": "0.0.4",
     "compression": "1.6.x",
     "express": "4.13.x",
     "fs-extra": "0.26.x",
     "http-proxy": "1.12.x",
     "lru-cache": "2.7.x",
+    "monaco-editor": "0.8.3",
     "morgan": "1.6.x",
+    "nopt": "3.0.x",
     "promise": "7.0.x",
     "promise-queue": "2.1.x",
-    "nopt": "3.0.x",
+    "pug": "^2.0.0-beta11",
     "serve-favicon": "2.3.x",
-    "serve-static": "1.10.x",
+    "shell-quote": "1.6.x",
     "temp": "0.8.x",
-    "underscore-node": "*"
+    "tree-kill": "1.1.x",
+    "underscore-node": "*",
+    "winston": "2.2.x"
   },
   "devDependencies": {
-    "supervisor": "*",
     "bower": "*",
+    "chai": "3.5.x",
+    "jshint": "*",
+    "mocha": "3.1.x",
     "requirejs": "*",
-    "jshint": "*"
+    "supervisor": "*",
+    "uglify-js": "*"
   },
   "scripts": {
-    "test": "make test"
+    "test": "mocha && make test"
   },
   "license": "BSD-2-Clause"
 }

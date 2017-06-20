@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Copyright (c) 2012-2016, Matt Godbolt
+// Copyright (c) 2012-2017, Matt Godbolt
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without 
@@ -24,13 +24,11 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
 // POSSIBILITY OF SUCH DAMAGE.
 
-// load external and internal libraries (will load more internal binaries later)
+// Initialise options and properties. Don't load any handlers here; they
+// may need an initialised properties library.
 var nopt = require('nopt'),
     os = require('os'),
     props = require('./lib/properties'),
-    CompileHandler = require('./lib/compile').CompileHandler,
-    buildDiffHandler = require('./lib/diff').buildDiffHandler,
-    express = require('express'),
     child_process = require('child_process'),
     path = require('path'),
     fs = require('fs-extra'),
@@ -38,8 +36,10 @@ var nopt = require('nopt'),
     https = require('https'),
     url = require('url'),
     Promise = require('promise'),
-    aws = require('./lib/aws'),
-    _ = require('underscore-node');
+    _ = require('underscore-node'),
+    utils = require('./lib/utils'),
+    express = require('express'),
+    logger = require('./lib/logger').logger;
 
 // Parse arguments from command line 'node ./app.js args...'
 var opts = nopt({
@@ -49,20 +49,26 @@ var opts = nopt({
     'host': [String],
     'port': [Number],
     'propDebug': [Boolean],
-    'static': [String]
+    'debug': [Boolean],
+    'static': [String],
+    'archivedVersions': [String],
 });
+
+if (opts.debug) logger.level = 'debug';
 
 // Set default values for omitted arguments
 var rootDir = opts.rootDir || './etc';
 var language = opts.language || "C++";
 var env = opts.env || ['dev'];
-var hostname = opts.host || os.hostname();
+var hostname = opts.host;
 var port = opts.port || 10240;
 var staticDir = opts.static || 'static';
+var archivedVersions = opts.archivedVersions;
 var gitReleaseName = child_process.execSync('git rev-parse HEAD').toString().trim();
+var versionedRootPrefix = "";
+if (opts.static && fs.existsSync(opts.static + '/v/' + gitReleaseName))
+    versionedRootPrefix = "v/" + gitReleaseName + "/";
 
-console.log(env);
-console.log(typeof(env));
 var propHierarchy = _.flatten([
     'defaults',
     env,
@@ -71,8 +77,9 @@ var propHierarchy = _.flatten([
         return e + '.' + process.platform;
     }),
     process.platform,
-    os.hostname()]);
-console.log("properties hierarchy: " + propHierarchy.join(', '));
+    os.hostname(),
+    'local']);
+logger.info("properties hierarchy: " + propHierarchy.join(', '));
 
 // Propagate debug mode if need be
 if (opts.propDebug) props.setDebug(true);
@@ -80,16 +87,14 @@ if (opts.propDebug) props.setDebug(true);
 // *All* files in config dir are parsed 
 props.initialize(rootDir + '/config', propHierarchy);
 
-// Instantiate a function to access records concerning "gcc-explorer" 
-// in hidden object props.properties
-var gccProps = props.propsFor("gcc-explorer");
+// Now load up our libraries.
+var CompileHandler = require('./lib/compile-handler').CompileHandler,
+    aws = require('./lib/aws'),
+    asm_doc_api = require('./lib/asm-docs-api');
 
-// Read from gccexplorer's config the wdiff configuration
-// that will be used to configure lib/diff.js
-var wdiffConfig = {
-    wdiffExe: gccProps('wdiff', "wdiff"),
-    maxOutput: gccProps("max-diff-output", 100000)
-};
+// Instantiate a function to access records concerning "compiler-explorer" 
+// in hidden object props.properties
+var gccProps = props.propsFor("compiler-explorer");
 
 // Instantiate a function to access records concerning the chosen language
 // in hidden object props.properties
@@ -100,10 +105,14 @@ function compilerProps(property, defaultValue) {
     // My kingdom for ccs... [see Matt's github page]
     var forCompiler = compilerPropsFunc(property, undefined);
     if (forCompiler !== undefined) return forCompiler;
-    return gccProps(property, defaultValue); // gccProps comes from lib/compile.js
+    return gccProps(property, defaultValue); // gccProps comes from lib/compile-handler.js
 }
-require('./lib/compile').initialise(gccProps, compilerProps);
 var staticMaxAgeSecs = gccProps('staticMaxAgeSecs', 0);
+function staticHeaders(res) {
+    if (staticMaxAgeSecs) {
+        res.setHeader('Cache-Control', 'public, max-age=' + staticMaxAgeSecs + ', must-revalidate');
+    }
+}
 
 var awsProps = props.propsFor("aws");
 var awsPoller = null;
@@ -115,14 +124,13 @@ function awsInstances() {
 // function to load internal binaries (i.e. lib/source/*.js)
 function loadSources() {
     var sourcesDir = "lib/sources";
-    var sources = fs.readdirSync(sourcesDir)
+    return fs.readdirSync(sourcesDir)
         .filter(function (file) {
             return file.match(/.*\.js$/);
         })
         .map(function (file) {
             return require("./" + path.join(sourcesDir, file));
         });
-    return sources;
 }
 
 // load effectively
@@ -131,6 +139,10 @@ var sourceToHandler = {};
 fileSources.forEach(function (source) {
     sourceToHandler[source.urlpart] = source;
 });
+
+var clientOptionsHandler = new ClientOptionsHandler(fileSources);
+var compileHandler = new CompileHandler(gccProps, compilerProps);
+var apiHandler = new ApiHandler(compileHandler);
 
 // auxiliary function used in clientOptionsHandler
 function compareOn(key) {
@@ -150,34 +162,46 @@ function ClientOptionsHandler(fileSources) {
     });
     // sort source file alphabetically
     sources = sources.sort(compareOn("name"));
-    var text = "";
-    this.setCompilers = function (compilers) {
-        var options = {
-            googleAnalyticsAccount: gccProps('clientGoogleAnalyticsAccount', 'UA-55180-6'),
-            googleAnalyticsEnabled: gccProps('clientGoogleAnalyticsEnabled', false),
-            sharingEnabled: gccProps('clientSharingEnabled', true),
-            githubEnabled: gccProps('clientGitHubRibbonEnabled', true),
-            gapiKey: gccProps('googleApiKey', ''),
-            googleShortLinkRewrite: gccProps('googleShortLinkRewrite', '').split('|'),
-            defaultSource: gccProps('defaultSource', ''),
-            language: language,
-            compilers: compilers,
-            sourceExtension: compilerProps('compileFilename').split('.', 2)[1],
-            defaultCompiler: compilerProps('defaultCompiler', ''),
-            compileOptions: compilerProps("options"),
-            supportsBinary: !!compilerProps("supportsBinary"),
-            postProcess: compilerProps("postProcess"),
-            sources: sources,
-            raven: gccProps('ravenUrl', ''),
-            release: gitReleaseName,
-            environment: env
-        };
-        text = JSON.stringify(options);
+    var languages = _.compact(_.map(gccProps("languages", '').split(':'), function (thing) {
+        if (!thing) return null;
+        var splat = thing.split("=");
+        return {language: splat[0], url: splat[1]};
+    }));
+    var supportsBinary = !!compilerProps("supportsBinary", true);
+    var supportsExecute = supportsBinary && !!compilerProps("supportsExecute", true);
+    var options = {
+        googleAnalyticsAccount: gccProps('clientGoogleAnalyticsAccount', 'UA-55180-6'),
+        googleAnalyticsEnabled: gccProps('clientGoogleAnalyticsEnabled', false),
+        sharingEnabled: gccProps('clientSharingEnabled', true),
+        githubEnabled: gccProps('clientGitHubRibbonEnabled', true),
+        gapiKey: gccProps('googleApiKey', ''),
+        googleShortLinkRewrite: gccProps('googleShortLinkRewrite', '').split('|'),
+        defaultSource: gccProps('defaultSource', ''),
+        language: language,
+        compilers: [],
+        sourceExtension: compilerProps('compileFilename').split('.', 2)[1],
+        defaultCompiler: compilerProps('defaultCompiler', ''),
+        compileOptions: compilerProps('defaultOptions', ''),
+        supportsBinary: supportsBinary,
+        supportsExecute: supportsExecute,
+        languages: languages,
+        sources: sources,
+        raven: gccProps('ravenUrl', ''),
+        release: gitReleaseName,
+        environment: env,
+        localStoragePrefix: gccProps('localStoragePrefix')
     };
+    this.setCompilers = function (compilers) {
+        options.compilers = compilers;
+    };
+    this.setCompilers([]);
     this.handler = function getClientOptions(req, res) {
         res.set('Content-Type', 'application/json');
-        res.set('Cache-Control', 'public, max-age=' + staticMaxAgeSecs);
-        res.end(text);
+        staticHeaders(res);
+        res.end(JSON.stringify(options));
+    };
+    this.get = function () {
+        return options;
     };
 }
 
@@ -190,16 +214,16 @@ function getSource(req, res, next) {
         return;
     }
     var action = bits[2];
-    if (action == "list") action = handler.list;
-    else if (action == "load") action = handler.load;
-    else if (action == "save") action = handler.save;
+    if (action === "list") action = handler.list;
+    else if (action === "load") action = handler.load;
+    else if (action === "save") action = handler.save;
     else action = null;
     if (action === null) {
         next();
         return;
     }
     action.apply(handler, bits.slice(3).concat(function (err, response) {
-        res.set('Cache-Control', 'public, max-age=' + staticMaxAgeSecs);
+        staticHeaders(res);
         if (err) {
             res.end(JSON.stringify({err: err}));
         } else {
@@ -219,10 +243,10 @@ function retryPromise(promiseFunc, name, maxFails, retryMs) {
             }, function (e) {
                 fails++;
                 if (fails < maxFails) {
-                    console.log("Failed " + name + " : " + e + ", retrying");
+                    logger.warn("Failed " + name + " : " + e + ", retrying");
                     setTimeout(doit, retryMs);
                 } else {
-                    console.log("Too many retries for " + name + " : " + e);
+                    logger.error("Too many retries for " + name + " : " + e);
                     reject(e);
                 }
             });
@@ -232,9 +256,8 @@ function retryPromise(promiseFunc, name, maxFails, retryMs) {
     });
 }
 
-// Auxiliary function to findCompilers()
-function configuredCompilers() {
-    // read config (file already read) (':' are used to separate compilers names)
+
+function findCompilers() {
     var exes = compilerProps("compilers", "/usr/bin/g++").split(":");
     var ndk = compilerProps('androidNdk');
     if (ndk) {
@@ -243,7 +266,7 @@ function configuredCompilers() {
             var path = ndk + "/toolchains/" + v + "/prebuilt/linux-x86_64/bin/";
             if (fs.existsSync(path)) {
                 var cc = fs.readdirSync(path).filter(function (filename) {
-                    return filename.indexOf("g++") != -1;
+                    return filename.indexOf("g++") !== -1;
                 });
                 a[i] = path + cc[0];
             } else {
@@ -257,13 +280,16 @@ function configuredCompilers() {
     }
 
     function fetchRemote(host, port, props) {
-        console.log("Fetching compilers from remote source " + host + ":" + port);
+        logger.info("Fetching compilers from remote source " + host + ":" + port);
         return retryPromise(function () {
                 return new Promise(function (resolve, reject) {
                     var request = http.get({
                         hostname: host,
                         port: port,
-                        path: "/api/compilers"
+                        path: "/api/compilers",
+                        headers: {
+                            'Accept': 'application/json'
+                        }
                     }, function (res) {
                         var str = '';
                         res.on('data', function (chunk) {
@@ -289,16 +315,16 @@ function configuredCompilers() {
             props('proxyRetries', 5),
             props('proxyRetryMs', 500))
             .catch(function () {
-                console.log("Unable to contact " + host + ":" + port + "; skipping");
+                logger.warn("Unable to contact " + host + ":" + port + "; skipping");
                 return [];
             });
     }
 
     function fetchAws() {
-        console.log("Fetching instances from AWS");
+        logger.info("Fetching instances from AWS");
         return awsInstances().then(function (instances) {
             return Promise.all(instances.map(function (instance) {
-                console.log("Checking instance " + instance.InstanceId);
+                logger.info("Checking instance " + instance.InstanceId);
                 var address = instance.PrivateDnsName;
                 if (awsProps("externalTestMode", false)) {
                     address = instance.PublicDnsName;
@@ -308,120 +334,112 @@ function configuredCompilers() {
         });
     }
 
-    return Promise.all(exes.map(function (name) {
+    function compilerConfigFor(name, parentProps) {
+        var base = "compiler." + name;
+
+        function props(name, def) {
+            return parentProps(base + "." + name, parentProps(name, def));
+        }
+
+        var supportsBinary = !!props("supportsBinary", true);
+        var supportsExecute = supportsBinary && !!props("supportsExecute", true);
+        var compilerInfo = {
+            id: name,
+            exe: compilerProps(base + ".exe", name),
+            name: props("name", name),
+            alias: props("alias"),
+            options: props("options"),
+            versionFlag: props("versionFlag"),
+            versionRe: props("versionRe"),
+            compilerType: props("compilerType", ""),
+            demangler: props("demangler", ""),
+            objdumper: props("objdumper", ""),
+            intelAsm: props("intelAsm", ""),
+            needsMulti: !!props("needsMulti", true),
+            supportsBinary: supportsBinary,
+            supportsExecute: supportsExecute,
+            postProcess: props("postProcess", "").split("|")
+        };
+        logger.info("Found compiler", compilerInfo);
+        return Promise.resolve(compilerInfo);
+    }
+
+    function recurseGetCompilers(name, parentProps) {
         if (name.indexOf("@") !== -1) {
             var bits = name.split("@");
             var host = bits[0];
             var port = parseInt(bits[1]);
             return fetchRemote(host, port, gccProps);
         }
-        if (name == "AWS") {
-            return fetchAws();
-        }
-        var base = "compiler." + name;
-        var exe = compilerProps(base + ".exe", "");
-        if (!exe) {
-            return Promise.resolve({id: name, exe: name, name: name});
-        }
-        function props(name, def) {
-            return compilerProps(base + "." + name, compilerProps(name, def));
-        }
+        if (name.indexOf("&") === 0) {
+            var groupName = name.substr(1);
 
-        return Promise.resolve({
-            id: name,
-            exe: exe,
-            name: props("name", name),
-            alias: props("alias"),
-            options: props("options"),
-            versionFlag: props("versionFlag"),
-            is6g: !!props("is6g", false),
-            isCl: !!props("isCl", false),
-            intelAsm: props("intelAsm", ""),
-            asmFlag: props("asmFlag", "-S"),
-            outputFlag: props("outputFlag", "-o"),
-            needsMulti: !!props("needsMulti", true),
-            supportsBinary: !!props("supportsBinary", true),
-            postProcess: props("postProcess", "")
-        });
-    })).then(_.flatten);
-}
+            var props = function (name, def) {
+                return compilerProps("group." + groupName + "." + name, parentProps(name, def));
+            };
 
-// Auxiliary function to findCompilers()
-function getCompilerInfo(compilerInfo) {
-    if (compilerInfo.remote) {
-        return Promise.resolve(compilerInfo);
+            var exes = props('compilers', '').split(":");
+            logger.info("Processing compilers from group " + groupName);
+            return Promise.all(exes.map(function (compiler) {
+                return recurseGetCompilers(compiler, props);
+            }));
+        }
+        if (name === "AWS") return fetchAws();
+        return Promise.resolve(compilerConfigFor(name, parentProps));
     }
-    return new Promise(function (resolve) {
-        var compiler = compilerInfo.exe;
-        var versionFlag = compilerInfo.versionFlag || '--version';
-        // fill field compilerInfo.version,
-        // assuming the compiler returns it's version on 1 line
-        child_process.exec('"' + compiler + '" ' + versionFlag, function (err, output) {
-            if (err) return resolve(null);
-            compilerInfo.version = output.split('\n')[0];
-            if (compilerInfo.intelAsm) {
-                return resolve(compilerInfo);
-            }
 
-            // get informations on the compiler's options
-            child_process.exec(compiler + ' --target-help', function (err, output) {
-                var options = {};
-                if (!err) {
-                    var splitness = /--?[-a-zA-Z]+( ?[-a-zA-Z]+)/;
-                    output.split('\n').forEach(function (line) {
-                        var match = line.match(splitness);
-                        if (!match) return;
-                        options[match[0]] = true;
-                    });
-                }
-                if (options['-masm']) {
-                    compilerInfo.intelAsm = "-masm=intel";
-                }
-
-                // debug (seems to be displayed multiple times):
-                if (opts.propDebug) console.log("compiler options: " + JSON.stringify(options, null, 4));
-
-                resolve(compilerInfo);
-            });
-        });
-    });
-}
-
-function findCompilers() {
-    return configuredCompilers()
+    return Promise.all(
+        exes.map(function (compiler) {
+            return recurseGetCompilers(compiler, compilerProps);
+        })
+    )
+        .then(_.flatten)
         .then(function (compilers) {
-            return Promise.all(compilers.map(getCompilerInfo));
+            return compileHandler.setCompilers(compilers);
         })
         .then(function (compilers) {
-            compilers = compilers.filter(function (x) {
-                return x !== null;
+            return _.filter(compilers, function (x) {
+                return x;
             });
+        })
+        .then(function (compilers) {
             compilers = compilers.sort(compareOn("name"));
             return compilers;
         });
 }
 
-// Instantiate a function that write informations on compiler,
-// in JSON format (on which page ?)
-function ApiHandler() {
-    var reply = "";
+function ApiHandler(compileHandler) {
+    this.compilers = [];
+    this.compileHandler = compileHandler;
     this.setCompilers = function (compilers) {
-        reply = JSON.stringify(compilers);
+        this.compilers = compilers;
     };
-    this.handler = function apiHandler(req, res, next) {
-        var bits = req.url.split("/");
-        if (bits.length !== 2 || req.method !== "GET") return next();
-        switch (bits[1]) {
-            default:
-                next();
-                break;
-
-            case "compilers":
-                res.set('Content-Type', 'application/json');
-                res.end(reply);
-                break;
+    this.handler = express.Router();
+    this.handler.use(function (req, res, next) {
+        res.header("Access-Control-Allow-Origin", "*");
+        res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+        next();
+    });
+    this.handler.get('/compilers', _.bind(function (req, res) {
+        if (req.accepts(['text', 'json']) === 'json') {
+            res.set('Content-Type', 'application/json');
+            res.end(JSON.stringify(this.compilers));
+        } else {
+            res.set('Content-Type', 'text/plain');
+            var title = 'Compiler Name';
+            var maxLength = _.max(_.pluck(_.pluck(this.compilers, 'id').concat([title]), 'length'));
+            res.write(utils.padRight(title, maxLength) + ' | Description\n');
+            res.end(_.map(this.compilers, function (compiler) {
+                return utils.padRight(compiler.id, maxLength) + ' | ' + compiler.name;
+            }).join("\n"));
         }
-    };
+    }, this));
+    this.handler.get('/asm/:opcode', asm_doc_api.asmDocsHandler);
+    this.handler.param('compiler', _.bind(function (req, res, next, compilerName) {
+        req.compiler = compilerName;
+        next();
+    }, this));
+    this.handler.post('/compiler/:compiler/compile', this.compileHandler.handler);
 }
 
 function shortUrlHandler(req, res, next) {
@@ -436,8 +454,8 @@ function shortUrlHandler(req, res, next) {
             responseText += d;
         });
         response.on('end', function () {
-            if (response.statusCode != 200) {
-                console.log("Failed to resolve short URL " + bits[1] + " - got response " +
+            if (response.statusCode !== 200) {
+                logger.error("Failed to resolve short URL " + bits[1] + " - got response " +
                     response.statusCode + " : " + responseText);
                 return next();
             }
@@ -446,7 +464,7 @@ function shortUrlHandler(req, res, next) {
             var parsed = url.parse(resultObj.longUrl);
             var allowedRe = new RegExp(gccProps('allowedShortUrlHostRe'));
             if (parsed.host.match(allowedRe) === null) {
-                console.log("Denied access to short URL " + bits[1] + " - linked to " + resultObj.longUrl);
+                logger.warn("Denied access to short URL " + bits[1] + " - linked to " + resultObj.longUrl);
                 return next();
             }
             res.writeHead(301, {
@@ -456,73 +474,116 @@ function shortUrlHandler(req, res, next) {
             res.end();
         });
     }).on('error', function (e) {
-        res.end("TODO: error " + e.message);
+        logger.error("Error handling google URL shortener request", e);
+        res.end("Error " + e.message);
     });
 }
 
-var clientOptionsHandler = new ClientOptionsHandler(fileSources);
-var apiHandler = new ApiHandler();
-var compileHandler = new CompileHandler();
+findCompilers()
+    .then(function (compilers) {
+        var prevCompilers;
 
-findCompilers().then(function (compilers) {
-
-    var prevCompilers = [];
-
-    function onCompilerChange(compilers) {
-        if (JSON.stringify(prevCompilers) == JSON.stringify(compilers)) {
-            return;
+        function onCompilerChange(compilers) {
+            if (JSON.stringify(prevCompilers) === JSON.stringify(compilers)) {
+                return;
+            }
+            logger.info("Compilers:", compilers);
+            if (compilers.length === 0) {
+                logger.error("#### No compilers found: no compilation will be done!");
+            }
+            prevCompilers = compilers;
+            clientOptionsHandler.setCompilers(compilers);
+            apiHandler.setCompilers(compilers);
         }
-        console.log("Compilers:");
-        compilers.forEach(function (c) {
-            console.log(c.id + " : " + c.name + " : " + (c.exe || c.remote));
+
+        onCompilerChange(compilers);
+
+        var rescanCompilerSecs = gccProps('rescanCompilerSecs', 0);
+        if (rescanCompilerSecs) {
+            logger.info("Rescanning compilers every " + rescanCompilerSecs + "secs");
+            setInterval(function () {
+                findCompilers().then(onCompilerChange);
+            }, rescanCompilerSecs * 1000);
+        }
+
+        var webServer = express(),
+            sFavicon = require('serve-favicon'),
+            bodyParser = require('body-parser'),
+            morgan = require('morgan'),
+            compression = require('compression'),
+            restreamer = require('./lib/restreamer');
+
+        logger.info("=======================================");
+        logger.info("Listening on http://" + (hostname || 'localhost') + ":" + port + "/");
+        logger.info("  serving static files from '" + staticDir + "'");
+        logger.info("  git release " + gitReleaseName);
+
+        function renderConfig(extra) {
+            var options = _.extend(extra, clientOptionsHandler.get());
+            options.compilerExplorerOptions = JSON.stringify(options);
+            options.root = versionedRootPrefix;
+            return options;
+        }
+
+        var embeddedHandler = function (req, res) {
+            staticHeaders(res);
+            res.render('embed', renderConfig({embedded: true}));
+        };
+        webServer
+            .set('trust proxy', true)
+            .set('view engine', 'pug')
+            .use(morgan('combined', {stream: logger.stream}))
+            .use(compression())
+            .get('/', function (req, res) {
+                staticHeaders(res);
+                res.render('index', renderConfig({embedded: false}));
+            })
+            .get('/e', embeddedHandler)
+            .get('/embed.html', embeddedHandler) // legacy. not a 301 to prevent any redirect loops between old e links and embed.html
+            .get('/embed-ro', function (req, res) {
+                staticHeaders(res);
+                res.render('embed', renderConfig({embedded: true, readOnly: true}));
+            })
+            .get('/robots.txt', function (req, res) {
+                staticHeaders(res);
+                res.end('User-agent: *\nSitemap: https://godbolt.org/sitemap.xml');
+            })
+            .get('/sitemap.xml', function (req, res) {
+                staticHeaders(res);
+                res.set('Content-Type', 'application/xml');
+                res.render('sitemap');
+            })
+            .use(sFavicon(staticDir + '/favicon.ico'))
+            .use('/v', express.static(staticDir + '/v', {maxAge: Infinity, index: false}))
+            .use(express.static(staticDir, {maxAge: staticMaxAgeSecs * 1000}));
+        if (archivedVersions) {
+            // The archived versions directory is used to serve "old" versioned data during updates. It's expected
+            // to contain all the SHA-hashed directories from previous versions of Compiler Explorer.
+            logger.info("  serving archived versions from", archivedVersions);
+            webServer.use('/v', express.static(archivedVersions, {maxAge: Infinity, index: false}));
+        }
+        webServer
+            .use(bodyParser.json({limit: gccProps('bodyParserLimit', '1mb')}))
+            .use(bodyParser.text({
+                limit: gccProps('bodyParserLimit', '1mb'), type: function () {
+                    return true;
+                }
+            }))
+            .use(restreamer())
+            .get('/client-options.json', clientOptionsHandler.handler)
+            .use('/source', getSource)
+            .use('/api', apiHandler.handler)
+            .use('/g', shortUrlHandler)
+            .post('/compile', compileHandler.handler);
+        logger.info("=======================================");
+
+        webServer.on('error', function (err) {
+            logger.error('Caught error:', err, "(in web error handler; continuing)");
         });
-        prevCompilers = compilers;
-        clientOptionsHandler.setCompilers(compilers);
-        apiHandler.setCompilers(compilers);
-        compileHandler.setCompilers(compilers);
-    }
 
-    onCompilerChange(compilers);
-
-    var rescanCompilerSecs = gccProps('rescanCompilerSecs', 0);
-    if (rescanCompilerSecs) {
-        console.log("Rescanning compilers every " + rescanCompilerSecs + "secs");
-        setInterval(function () {
-            findCompilers().then(onCompilerChange);
-        }, rescanCompilerSecs * 1000);
-    }
-
-    var webServer = express(),
-        sFavicon = require('serve-favicon'),
-        sStatic = require('serve-static'),
-        bodyParser = require('body-parser'),
-        logger = require('morgan'),
-        compression = require('compression'),
-        restreamer = require('./lib/restreamer'),
-        diffHandler = buildDiffHandler(wdiffConfig);
-
-    webServer
-        .use(logger('combined'))
-        .use(compression())
-        .use(sFavicon(staticDir + '/favicon.ico'))
-        .use(sStatic(staticDir, {maxAge: staticMaxAgeSecs * 1000}))
-        .use(bodyParser.json())
-        .use(restreamer())
-        .get('/client-options.json', clientOptionsHandler.handler)
-        .use('/source', getSource)
-        .use('/api', apiHandler.handler)
-        .use('/g', shortUrlHandler)
-        .post('/compile', compileHandler.handler) // used inside static/compiler.js
-        .post('/diff', diffHandler); // used inside static/compiler.js
-
-    // GO!
-    console.log("=======================================");
-    console.log("Listening on http://" + hostname + ":" + port + "/");
-    console.log("  serving static files from '" + staticDir + "'");
-    console.log("  git release " + gitReleaseName);
-    console.log("=======================================");
-    webServer.listen(port, hostname);
-}).catch(function (err) {
-    console.log("Error: " + err);
-    process.exit(1);
-});
+        webServer.listen(port, hostname);
+    })
+    .catch(function (err) {
+        logger.error("Promise error:", err, "(shutting down)");
+        process.exit(1);
+    });

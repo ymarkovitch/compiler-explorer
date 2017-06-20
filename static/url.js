@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2016, Matt Godbolt
+// Copyright (c) 2012-2017, Matt Godbolt
 //
 // All rights reserved.
 //
@@ -28,14 +28,13 @@ define(function (require) {
     var GoldenLayout = require('goldenlayout');
     var rison = require('rison');
     var $ = require('jquery');
-    var editor = require('editor');
-    var compiler = require('compiler');
+    var Components = require('components');
     var lzstring = require('lzstring');
     var _ = require('underscore');
 
     function convertOldState(state) {
         var sc = state.compilers[0];
-        if (!sc) return false;
+        if (!sc) throw new Error("Unable to determine compiler from old state");
         var content = [];
         var source;
         if (sc.sourcez) {
@@ -46,8 +45,8 @@ define(function (require) {
         var options = {compileOnChange: true, colouriseAsm: state.filterAsm.colouriseAsm};
         var filters = _.clone(state.filterAsm);
         delete filters.colouriseAsm;
-        content.push(editor.getComponentWith(1, source, options));
-        content.push(compiler.getComponentWith(1, filters, sc.options, sc.compiler));
+        content.push(Components.getEditorWith(1, source, options));
+        content.push(Components.getCompilerWith(1, filters, sc.options, sc.compiler));
         return {version: 4, content: [{type: 'row', content: content}]};
     }
 
@@ -69,7 +68,7 @@ define(function (require) {
                 state = GoldenLayout.unminifyConfig(state);
                 break;
             default:
-                return false;
+                throw new Error("Invalid version '" + state.version + "'");
         }
         return state;
     }
@@ -84,21 +83,24 @@ define(function (require) {
 
     function deserialiseState(stateText) {
         var state;
+        var exception;
         try {
             state = unrisonify(stateText);
             if (state && state.z) {
                 state = unrisonify(lzstring.decompressFromBase64(state.z));
             }
-        } catch (ignored) {
+        } catch (ex) {
+            exception = ex;
         }
-
 
         if (!state) {
             try {
                 state = $.parseJSON(decodeURIComponent(stateText));
-            } catch (ignored) {
+            } catch (ex) {
+                if (!exception) exception = ex;
             }
         }
+        if (!state && exception) throw exception;
         return loadState(state);
     }
 
@@ -117,6 +119,8 @@ define(function (require) {
 
     return {
         deserialiseState: deserialiseState,
-        serialiseState: serialiseState
+        serialiseState: serialiseState,
+        unrisonify: unrisonify,
+        risonify: risonify
     };
 });
